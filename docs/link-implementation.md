@@ -119,6 +119,59 @@ Runtime checks on 2026-10-30 used two Minecraft 26.3 JVMs, PostgreSQL 17 and Red
 The automated suite passed 29 core tests (23 against real PostgreSQL/Redis) and five Netty
 gate tests, with no skips. All eight Minecraft feature patches reapplied successfully.
 
+### Expanded validation (2026-10-30)
+
+Additional fixtures use real connected players but invoke NMS menu methods on the server
+thread. They are not a graphical-client input or third-party-plugin compatibility suite.
+`linkprobe matrix-menus` checks split/left clicks, shift move, hotbar swap, drag distribution,
+crafting output, merchant trade and item pickup. All seven passed. Removed entities are not
+called a second time: the first draft of the fixture incorrectly invoked `playerTouch` on
+an already discarded Java object and was corrected to match world collision semantics.
+
+| Check | Result | Evidence / boundary |
+| --- | --- | --- |
+| Crafting input + cursor after forced JVM exit | PASS | Exactly five diamonds and three emeralds recovered |
+| Chest + running hopper after forced JVM exit | PASS | Eleven chest diamonds; hopper/destination total sixteen iron ingots |
+| Equipped entity after forced JVM exit | PASS | Exactly one tagged armor stand with its helmet |
+| Death and respawn | PASS | Seven new nether stars dropped, old inventory cleared, respawn alive |
+| Public world API lifecycle | PASS | Editor → publish → clone → save → unload → load → delete retains the template block |
+| Ender pearl persistence | PASS | One pearl, correct shooter, player ticket registration after restart |
+| Vehicle entity persistence | PASS | Exactly one original boat after restart |
+| Player mounted relationship | **FAIL** | Player reconnects dismounted; `RootVehicle` is suppressed by the codec |
+| Map pixels across backends | **FAIL** | Map item survives A→B but B has no original saved map pixels |
+| Transfer boundary recovery | PASS | Six additional SQL cases: checkpoint, prepared, issued, ready, dispatched, accepted; stale writers fenced |
+| 51 protocol clients / capacity | PASS | All 51 joined without errors; one backend distributed 50 + 1 across spawn worlds |
+| 51-client performance | **FAIL** | One-minute TPS fell to 4.6; not suitable for the requested operating scale |
+| Direct backend connection | PASS | Modern-forwarding backend rejected a connection without Velocity |
+| Capacity release on disconnect | PASS | Zero ADMITTED reservations after all 51 clients disconnected |
+| Aborted native frame | PASS | After setting inventory to 99 and replacing the chest, injected exception stopped the backend; restart restored inventory 7 and chest 11 |
+| Redis unavailable during startup | **FIXED / PASS** | Previously aborted startup; deferred notification connection now allows startup while Redis is down |
+| Redis outage after connection | PASS | Backend stayed responsive and renewed DB ownership beyond one lease period; delivery resumed after Redis returned |
+
+The expanded automated suite has 40 passing tests without skips: 29 PostgreSQL/Redis cases,
+four frame-commit tests, two segmented-snapshot tests and five Netty gate tests. The six new
+transfer boundary cases are database state-machine tests, not six separate live JVM kills.
+Redis initialization/retry now runs on `Link-Notifications`, separate from the lease heartbeat
+and server bootstrap; durable outbox rows remain pending during failures. Runtime probes
+record `MATRIX_PASS` / `MATRIX_FAIL` separately from transaction completion.
+
+Load environment: Windows 11, Java 25, one backend with `-Xmx2G`, local Docker PostgreSQL 17,
+Velocity 4.3.1, 51 idle protocol clients launched four seconds apart, then held for 60 seconds.
+The backend had its two spawn worlds and an earlier editor world loaded. There was no local
+Gradle build during measurement. Observed one-minute TPS: 18.3 at 9 clients, 11.0 at 21,
+7.5 at 33, 6.2 at 41, 5.1 at 50 and 4.6 at 51. These are moving averages during a ramp,
+not steady-state capacity claims. `/mspt` does not account for all surrounding journal work;
+its low values must not be used to override the observed wall-clock TPS loss.
+
+Run `node link-integration/load-clients.cjs 51 4000 60000` only against the disposable loopback
+proxy after whitelisting the offline UUIDs of LinkLoad0 through LinkLoad50 and setting the
+test backend's max-players above 51. Results are written under ignored `build/load-clients/`.
+
+This matrix is deliberately not “everything passed.” The mounted relationship, cross-node
+map service and throughput failures remain release blockers. Online Mojang authentication,
+arbitrary plugin virtual menus, async plugin writes, production-size maps and long-running
+mixed gameplay/network-partition matrices have not been certified.
+
 The separate `link-integration/wire-client.cjs` derives packet IDs from the patched 26.3
 sources and exercises a real TCP connection through Velocity. It requires a disposable
 loopback offline-auth proxy on port 25594 and a whitelisted `LinkWire` offline UUID.

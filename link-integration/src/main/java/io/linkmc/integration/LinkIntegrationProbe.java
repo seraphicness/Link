@@ -13,8 +13,10 @@ public final class LinkIntegrationProbe extends JavaPlugin {
         if(!System.getenv().getOrDefault("LINK_NODE_ID","").startsWith("test-"))throw new IllegalStateException("Integration probe requires test-* node");
         getCommand("linkprobe").setExecutor((sender,command,label,args)->{
             if(sender instanceof Player||args.length!=1)return false;
+            if(args[0].equals("matrix-worlds")){WorldMatrix.run();return true;}
             boolean prepare=args[0].equals("prepare");
             Link.api().engine().transact(()->{
+                if(args[0].startsWith("matrix-")){GameplayMatrix.run(args[0]);return;}
                 if(args[0].equals("platform")){
                     World world=java.util.Objects.requireNonNull(Bukkit.getWorld("link-spawn"));
                     world.setDifficulty(Difficulty.NORMAL);
@@ -60,7 +62,7 @@ public final class LinkIntegrationProbe extends JavaPlugin {
                     var objective=Bukkit.getScoreboardManager().getMainScoreboard().getObjective("linkprobe");
                     if(objective==null||objective.getScore("marker").getScore()!=17)throw new AssertionError("Scoreboard did not recover");
                 }
-            }).whenComplete((v,error)->{if(error==null)getLogger().info("LINK_PROBE_OK "+args[0]);else getLogger().log(java.util.logging.Level.SEVERE,"LINK_PROBE_FAILED",error);});
+            }).whenComplete((v,error)->{if(error==null)getLogger().info((args[0].startsWith("matrix-")?"LINK_PROBE_COMMITTED ":"LINK_PROBE_OK ")+args[0]);else getLogger().log(java.util.logging.Level.SEVERE,"LINK_PROBE_FAILED",error);});
             return true;
         });
     }

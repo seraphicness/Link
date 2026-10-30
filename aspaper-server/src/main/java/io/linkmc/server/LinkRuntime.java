@@ -19,6 +19,8 @@ public final class LinkRuntime implements LinkApi {
     private final String node;
     private final NetworkStore networkStore;
     private RedisOutbox redis;
+    private volatile boolean closing;
+    private final ScheduledExecutorService notifications=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Notifications").factory());
     private SpawnProvisioner provisioner;
     private volatile Session nodeLease;
     private final ScheduledExecutorService heartbeat=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Heartbeat").factory());
@@ -63,7 +65,6 @@ public final class LinkRuntime implements LinkApi {
                         net.minecraft.server.MinecraftServer.LOGGER.error("Link lost its DB lease; stopping to fence this backend",e);
                         org.bukkit.Bukkit.shutdown();
                     }
-                    if(runtime.redis!=null)try{runtime.redis.flush(64);}catch(Exception e){net.minecraft.server.MinecraftServer.LOGGER.warn("Redis delivery deferred; SQL outbox retained",e);}
                 },5,5,TimeUnit.SECONDS);
                 NativeJournal.finishStartup();
             } catch(Exception e){runtime.close();throw e;}
@@ -86,18 +87,28 @@ public final class LinkRuntime implements LinkApi {
                 }
                 runtime.provisioner=new SpawnProvisioner(runtime.worlds,runtime.networkStore,runtime.node,System.getProperty("link.spawn.template","lobby"),Integer.getInteger("link.spawn.version",1),Integer.getInteger("link.spawn.capacity",50),Integer.getInteger("link.spawn.max-worlds",3));
             }
-            String redisUri=System.getenv("LINK_REDIS_URI");if(redisUri!=null&&!redisUri.isBlank())runtime.redis=new RedisOutbox(runtime.database,redisUri);
+            String redisUri=System.getenv("LINK_REDIS_URI");
+            if(redisUri!=null&&!redisUri.isBlank())runtime.notifications.scheduleWithFixedDelay(()->runtime.deliverNotifications(redisUri),0,5,TimeUnit.SECONDS);
             LinkCommand.register(runtime);
         }catch(Exception e){throw new IllegalStateException("Link world activation failed",e);}
     }
     private static String required(String name){String value=System.getenv(name);if(value==null||value.isBlank())throw new IllegalStateException("Missing "+name);return value;}
     public static void stop(){LinkRuntime runtime=instance;if(runtime!=null){instance=null;RuntimeProvider.uninstall(runtime);runtime.close();}}
     static void fence(){LinkRuntime runtime=instance;if(runtime!=null)runtime.heartbeat.shutdownNow();}
+    private synchronized void deliverNotifications(String uri){
+        if(closing)return;
+        try{
+            if(redis==null)redis=new RedisOutbox(database,uri);
+            redis.flush(64);
+        }catch(Exception e){net.minecraft.server.MinecraftServer.LOGGER.warn("Redis delivery deferred; SQL outbox retained",e);}
+    }
+    private synchronized void closeNotifications(){if(redis!=null){redis.close();redis=null;}}
     private void close(){
+        closing=true;notifications.shutdownNow();
         worlds.close();
         try {if(NativeJournal.enabled())NativeJournal.shutdown();else driver.saveOnShutdown();}
         catch(Exception e){net.minecraft.server.MinecraftServer.LOGGER.error("Link final checkpoint failed; ownership will not be explicitly released",e);}
-        finally {heartbeat.shutdownNow();if(redis!=null)redis.close();service.close();database.close();}
+        finally {heartbeat.shutdownNow();closeNotifications();service.close();database.close();}
     }
     public Data data(){return service.data();}
     public Sessions sessions(){return service.sessions();}

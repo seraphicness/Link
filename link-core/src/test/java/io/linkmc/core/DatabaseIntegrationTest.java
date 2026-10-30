@@ -239,4 +239,28 @@ class DatabaseIntegrationTest {
         var channel=network.channels().getFirst();assertEquals(1,channel.occupied());assertEquals(0,channel.reserved());
         assertThrows(ConflictException.class,()->network.reserve(UUID.randomUUID(),UUID.randomUUID()));
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,2,3,4,5})
+    void recoveryAtEveryTransferBoundaryFencesOldOwners(int boundary)throws Exception{
+        network.heartbeat("a",50);network.heartbeat("b",50);
+        Destination destination=new Destination("b","spawn",8,66,8,90,0);network.register("b:spawn",destination,50);
+        UUID player=UUID.randomUUID(),operation=UUID.randomUUID();Session source=sessions.acquire(player,"a");
+        events.commit(change(source,UUID.randomUUID(),0,"seven-diamonds"));
+        var reservation=network.reserve(player,operation,destination);var routes=new RouteStore(db);var arrivals=new ArrivalStore(db);routes.request(operation,reservation);
+        Session owner=source;
+        if(boundary>=1)sessions.prepare(source,operation,destination);
+        if(boundary>=2)arrivals.issue(operation,reservation,operation);
+        if(boundary>=3)routes.ready(operation);
+        if(boundary>=4)assertTrue(routes.dispatch(operation));
+        if(boundary>=5)owner=arrivals.claim(player,"b").session();
+        Session crashed=owner;
+        db.transaction(c->{update(c,"UPDATE link_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE player=?",player);return null;});
+        Session recovered=sessions.acquire(player,"c");assertTrue(recovered.epoch()>crashed.epoch());
+        assertArrayEquals("seven-diamonds".getBytes(java.nio.charset.StandardCharsets.UTF_8),events.read("player:"+player).orElseThrow().payload());
+        assertThrows(ConflictException.class,()->events.commit(change(source,UUID.randomUUID(),1,"stale-source")));
+        assertThrows(ConflictException.class,()->events.commit(change(crashed,UUID.randomUUID(),1,"stale-destination")));
+        if(boundary>=1)assertThrows(ConflictException.class,()->sessions.accept(player,operation,"b"));
+        events.commit(change(recovered,UUID.randomUUID(),1,"seven-diamonds-recovered"));
+        assertEquals(2,events.history("player:"+player,0,10).size());
+    }
 }

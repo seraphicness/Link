@@ -9,11 +9,12 @@ function vint(n){const bytes=[];do{let v=n&127;n>>>=7;if(n)v|=128;bytes.push(v);
 function readVar(b,offset=0){let n=0;for(let i=0;i<5;i++){if(offset+i>=b.length)return null;const c=b[offset+i];n|=(c&127)<<(7*i);if(!(c&128))return [n,offset+i+1];}throw Error('Invalid VarInt');}
 function string(s){const b=Buffer.from(s);return Buffer.concat([vint(b.length),b]);}
 let state='login',compression=-1,buffer=Buffer.alloc(0),joined=0,position;
-const socket=net.connect(25594,'127.0.0.1',()=>{
-    const port=Buffer.alloc(2);port.writeUInt16BE(25594);
+const playerName=process.env.LINK_WIRE_NAME||'LinkWire',proxyPort=Number(process.env.LINK_WIRE_PORT||25594);
+const socket=net.connect(proxyPort,'127.0.0.1',()=>{
+    const port=Buffer.alloc(2);port.writeUInt16BE(proxyPort);
     raw(Buffer.concat([vint(0),vint(777),string('localhost'),port,vint(2)]));
-    const uuid=crypto.createHash('md5').update('OfflinePlayer:LinkWire').digest();uuid[6]=(uuid[6]&15)|48;uuid[8]=(uuid[8]&63)|128;
-    send('SERVERBOUND_HELLO',Buffer.concat([string('LinkWire'),uuid]));
+    const uuid=crypto.createHash('md5').update('OfflinePlayer:'+playerName).digest();uuid[6]=(uuid[6]&15)|48;uuid[8]=(uuid[8]&63)|128;
+    send('SERVERBOUND_HELLO',Buffer.concat([string(playerName),uuid]));
 });
 function raw(payload){if(compression>=0)payload=payload.length>=compression?Buffer.concat([vint(payload.length),zlib.deflateSync(payload)]):Buffer.concat([vint(0),payload]);socket.write(Buffer.concat([vint(payload.length),payload]));}
 function send(name,payload=Buffer.alloc(0)){const id=outbound[state].indexOf(name);if(id<0)throw Error('Unknown '+state+' packet '+name);raw(Buffer.concat([vint(id),payload]));}
@@ -42,6 +43,7 @@ function receive(name,data){
 socket.on('data',chunk=>{try{buffer=Buffer.concat([buffer,chunk]);while(buffer.length){const size=readVar(buffer);if(!size)return;if(size[0]<0||size[0]>16*1024*1024)throw Error('Frame size');if(buffer.length<size[1]+size[0])return;let payload=buffer.subarray(size[1],size[1]+size[0]);buffer=buffer.subarray(size[1]+size[0]);if(compression>=0){const unpacked=readVar(payload);payload=unpacked[0]?zlib.inflateSync(payload.subarray(unpacked[1]),{maxOutputLength:16*1024*1024}):payload.subarray(unpacked[1]);}const packet=readVar(payload);receive(inbound[state][packet[0]],payload.subarray(packet[1]));}}catch(error){console.error(error);socket.destroy();process.exitCode=1;}});
 socket.on('error',e=>{console.error(e.message);process.exitCode=1;});
 const tick=setInterval(()=>{if(state==='game'&&!socket.destroyed){send('SERVERBOUND_CLIENT_TICK_END');}},50);
-const deadline=setTimeout(()=>{console.log('TEST_TIMEOUT');socket.destroy();process.exitCode=1;},300000);
+const deadline=setTimeout(()=>{console.log('TEST_TIMEOUT');socket.destroy();process.exitCode=1;},Number(process.env.LINK_WIRE_DURATION_MS||300000));
 socket.on('close',()=>{clearInterval(tick);clearTimeout(deadline);console.log('CLOSED');});
 process.on('SIGINT',()=>socket.end());
+process.on('message',message=>{if(message==='stop')socket.end();});
