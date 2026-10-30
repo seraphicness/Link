@@ -47,7 +47,7 @@ Linux/macOS에서는 `./gradlew`를 사용합니다. 결과는 `build/dist/`에 
 | `Link-Velocity-dev.jar` | Velocity의 `plugins/`에 설치하는 라우팅 모듈 |
 | `Link-API-dev.jar` | 플러그인 컴파일용 API. 서버에 설치하는 플러그인이 아님 |
 
-기본 모드는 `disabled`입니다. [실행 안내](docs/setup.md)에 따라 템플릿, DB, modern forwarding, `link.mode=journal`을 설정해야 합니다. Upstream 버전 문자열의 `stable`은 Link의 운영 안정성을 뜻하지 않습니다.
+첫 실행 시 서버 작업 폴더에 `link.yml`이 생성되며 기본 모드는 `disabled`입니다. [실행 안내](docs/setup.md)에 따라 YAML의 DB·노드·스폰 설정, 템플릿, modern forwarding을 준비하고 `mode: journal`을 설정해야 합니다. 기존 환경 변수와 `-Dlink.*` 옵션도 지원합니다. Upstream 버전 문자열의 `stable`은 Link의 운영 안정성을 뜻하지 않습니다.
 
 ## 검증 상태
 

@@ -1,0 +1,91 @@
+package io.linkmc.server;
+
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.Map;
+import java.util.Properties;
+import org.bukkit.configuration.file.YamlConfiguration;
+
+/** One startup snapshot; secrets are never copied into JVM properties or logged. */
+public final class LinkConfiguration {
+    private static LinkConfiguration instance;
+    private final String mode, node, jdbcUrl, username, password, redisUri, template;
+    private final int templateVersion, worldCapacity, nodeCapacity, maxWorlds;
+    public static synchronized LinkConfiguration get(){
+        if(instance==null)instance=load(Path.of("link.yml"),System.getenv(),System.getProperties());
+        return instance;
+    }
+    static LinkConfiguration load(Path file,Map<String,String> environment,Properties properties){
+        try{
+            try{Files.writeString(file,DEFAULTS,StandardOpenOption.CREATE_NEW);}catch(FileAlreadyExistsException ignored){}
+            var yaml=new YamlConfiguration();yaml.load(file.toFile());
+            return new LinkConfiguration(yaml,environment,properties);
+        }catch(IOException|org.bukkit.configuration.InvalidConfigurationException e){
+            // Parser errors may quote the line containing a password.
+            throw new IllegalStateException("Cannot read link.yml; check YAML syntax and file permissions");
+        }
+    }
+    private LinkConfiguration(YamlConfiguration yaml,Map<String,String> env,Properties props){
+        mode=props.getProperty("link.mode",string(yaml,"mode","disabled"));
+        if(!java.util.Set.of("disabled","tools","journal","strict").contains(mode))throw new IllegalArgumentException("Invalid mode in link.yml or -Dlink.mode");
+        node=env.getOrDefault("LINK_NODE_ID",string(yaml,"node.id","node-a"));
+        jdbcUrl=env.getOrDefault("LINK_JDBC_URL",string(yaml,"database.jdbc-url","jdbc:postgresql://127.0.0.1:5432/link"));
+        username=env.getOrDefault("LINK_DB_USER",string(yaml,"database.username","link"));
+        password=env.getOrDefault("LINK_DB_PASSWORD",string(yaml,"database.password",""));
+        Object enabled=yaml.get("redis.enabled",false);
+        if(!(enabled instanceof Boolean))throw new IllegalArgumentException("redis.enabled must be true or false in link.yml");
+        redisUri=env.getOrDefault("LINK_REDIS_URI",Boolean.TRUE.equals(enabled)?string(yaml,"redis.uri","redis://127.0.0.1:6379"):"");
+        template=props.getProperty("link.spawn.template",string(yaml,"spawn.template","lobby"));
+        templateVersion=positive(yaml,props,"spawn.version","link.spawn.version",1);
+        worldCapacity=positive(yaml,props,"spawn.capacity","link.spawn.capacity",50);
+        nodeCapacity=positive(yaml,props,"node.capacity","link.node.capacity",150);
+        maxWorlds=positive(yaml,props,"spawn.max-worlds","link.spawn.max-worlds",3);
+        io.linkmc.api.LinkApi.requireName(node);io.linkmc.api.LinkApi.requireName(template);
+        if(mode.equals("journal")||mode.equals("tools")){
+            if(!jdbcUrl.startsWith("jdbc:postgresql:")||username.isBlank()||password.isBlank())
+                throw new IllegalArgumentException("Configure database.jdbc-url, username and password in link.yml (or LINK_JDBC_URL, LINK_DB_USER, LINK_DB_PASSWORD)");
+        }
+    }
+    private static String string(YamlConfiguration yaml,String key,String fallback){
+        Object value=yaml.get(key,fallback);
+        if(!(value instanceof String text))throw new IllegalArgumentException(key+" must be a quoted string in link.yml");
+        return text;
+    }
+    private static int positive(YamlConfiguration yaml,Properties properties,String key,String property,int fallback){
+        try{int value=Integer.parseInt(properties.getProperty(property,String.valueOf(yaml.get(key,fallback))));if(value>0)return value;}catch(NumberFormatException ignored){}
+        throw new IllegalArgumentException(key+" must be a positive integer in link.yml or -D"+property);
+    }
+    public String mode(){return mode;}
+    public String node(){return node;}
+    public String jdbcUrl(){return jdbcUrl;}
+    public String username(){return username;}
+    public String password(){return password;}
+    public String redisUri(){return redisUri;}
+    public String template(){return template;}
+    public int templateVersion(){return templateVersion;}
+    public int worldCapacity(){return worldCapacity;}
+    public int nodeCapacity(){return nodeCapacity;}
+    public int maxWorlds(){return maxWorlds;}
+    private static final String DEFAULTS="""
+        # Link backend configuration. Restart the server after editing.
+        # Environment variables override database/node/Redis values.
+        # Existing -Dlink.* options override mode and spawn/capacity values.
+        # journal is experimental; strict is not available yet.
+        mode: disabled
+        node:
+          id: node-a
+          capacity: 150
+        database:
+          jdbc-url: 'jdbc:postgresql://127.0.0.1:5432/link'
+          username: 'link'
+          password: ''
+        redis:
+          enabled: false
+          uri: 'redis://127.0.0.1:6379'
+        spawn:
+          template: lobby
+          version: 1
+          capacity: 50
+          max-worlds: 3
+        """;
+}

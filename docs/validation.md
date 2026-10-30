@@ -80,7 +80,7 @@ $env:LINK_TEST_DB_PASSWORD='link_test_local'
 $env:LINK_TEST_REDIS_URI='redis://127.0.0.1:56379'
 .\gradlew.bat :link-core:test
 .\gradlew.bat applyAllPatches
-.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite
+.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests 'io.linkmc.server.Link*TestSuite'
 .\gradlew.bat linkDist
 ```
 
@@ -118,6 +118,10 @@ node link-integration/load-clients.cjs 51 4000 60000
 ```
 
 상태·개별 로그는 무시되는 `build/load-clients/`에 생성됩니다. `wire-client.cjs`는 `LINK_WIRE_NAME`, `LINK_WIRE_PORT`, `LINK_WIRE_DURATION_MS`로 테스트 이름·포트·실행 제한을 바꿀 수 있습니다. 로컬 `build/`의 시작·RCON 보조 스크립트와 비밀 설정은 저장소에 배포하지 않습니다.
+
+## 백엔드 YAML 설정 추가 검증
+
+`link.yml` 지원 추가 시 설정 테스트 7개와 기존 패킷 테스트 5개를 통과했습니다. 신규 파일 생성·기존 파일 보존·YAML 단독 값·환경 변수와 JVM 옵션 우선순위·잘못된 입력 거부·오류 메시지의 비밀 값 비노출을 확인했습니다. 새 작업 폴더에서 실제 JAR을 실행해 EULA 동의 전 파일 생성을 확인했고, DB 환경 변수와 `-Dlink.*` 없이 YAML만으로 `journal` 부팅을 확인했습니다. DB에서 노드 정원 34·월드 정원 17을 조회해 사용자 설정 적용도 검사했습니다. 9번째 Minecraft 패치 재적용이 성공했습니다.
 
 ## 미검증·미구현 범위
 

@@ -30,7 +30,7 @@ Java 25를 사용합니다. DB 테스트에는 폐기 가능한 PostgreSQL·Redi
 
 ```powershell
 .\gradlew.bat :link-core:test
-.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite
+.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests 'io.linkmc.server.Link*TestSuite'
 .\gradlew.bat linkDist
 ```
 

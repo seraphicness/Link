@@ -19,10 +19,11 @@ public final class NativeJournal {
     private static ScheduledExecutorService startupRenewal;
     /** Runs before Minecraft constructs global clocks, maps and other SavedData. */
     public static synchronized void initializeEarly(){
-        if(!System.getProperty("link.mode","disabled").equals("journal")||enabled())return;
+        var config=LinkConfiguration.get();
+        if(!config.mode().equals("journal")||enabled())return;
         try{
-            String node=Objects.requireNonNull(System.getenv("LINK_NODE_ID"),"LINK_NODE_ID");
-            Database db=Database.pooled(System.getenv("LINK_JDBC_URL"),System.getenv("LINK_DB_USER"),System.getenv("LINK_DB_PASSWORD"));db.migrate();
+            String node=config.node();
+            Database db=Database.pooled(config.jdbcUrl(),config.username(),config.password());db.migrate();
             SessionStore leases=new SessionStore(db,30);
             startupLease=leases.acquire(UUID.nameUUIDFromBytes(("link-node:"+node).getBytes(StandardCharsets.UTF_8)),node);
             initialize(db,node,()->startupLease);

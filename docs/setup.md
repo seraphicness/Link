@@ -24,7 +24,36 @@ Linux/macOS에서는 `./gradlew`를 사용합니다. JAR은 `build/dist/`에 생
 | `journal` | 실험적 네이티브 SQL 저장과 입장·이동 처리 |
 | `strict` | 검증 미완료로 시작 거부 |
 
-## 환경 변수
+## 백엔드 `link.yml`
+
+첫 실행 시 작업 디렉터리(보통 서버 JAR을 실행한 폴더)에 `link.yml`을 자동 생성합니다. EULA 확인과 월드 초기화 전에 생성하며 기존 파일은 덮어쓰지 않습니다. 수정 후 서버를 재시작하세요.
+
+```yaml
+mode: disabled
+node:
+  id: node-a
+  capacity: 150
+database:
+  jdbc-url: 'jdbc:postgresql://127.0.0.1:5432/link'
+  username: 'link'
+  password: ''
+redis:
+  enabled: false
+  uri: 'redis://127.0.0.1:6379'
+spawn:
+  template: lobby
+  version: 1
+  capacity: 50
+  max-worlds: 3
+```
+
+PostgreSQL에 DB·계정을 먼저 생성하고 `database` 항목을 입력하세요. 템플릿·Velocity 설정까지 준비한 뒤 `mode: journal`로 변경합니다. 비밀번호는 따옴표로 감싸고 작은따옴표 자체는 YAML 작은따옴표 문자열 안에서 두 번 적습니다. Redis 사용 시 `redis.enabled: true`로 바꿉니다.
+
+YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 실행할 수 있습니다. 접속 정보가 들어간 `link.yml`은 커밋하지 않습니다.
+
+## 환경 변수와 기존 옵션
+
+백엔드는 아래 환경 변수를 YAML보다 우선 적용합니다. 모드·스폰·정원은 기존 `-Dlink.*` 옵션이 우선합니다. 환경 변수의 비밀 값은 생성 파일에 복사하지 않습니다. **Velocity 플러그인과 오프라인 템플릿 발행 도구는 여전히 환경 변수를 사용합니다.** 백엔드의 YAML을 자동 공유하지 않습니다. 백엔드 노드 이름은 `node.id` 또는 `LINK_NODE_ID`로 지정합니다.
 
 | 변수 | 대상 | 의미 |
 | --- | --- | --- |
@@ -34,7 +63,7 @@ Linux/macOS에서는 `./gradlew`를 사용합니다. JAR은 `build/dist/`에 생
 | `LINK_NODE_ID` | 백엔드 | 실행 중인 다른 노드와 중복되지 않는 이름 |
 | `LINK_REDIS_URI` | 백엔드, 선택 | 예: `redis://127.0.0.1:6379` |
 
-백엔드의 `LINK_NODE_ID`는 Velocity의 서버 등록 이름과 일치해야 합니다. 모든 백엔드와 프록시는 같은 Link DB를 사용합니다. 시작 시 스키마를 초기화하므로 DB 계정에 필요한 권한이 있어야 합니다. 자격 증명은 저장소에 커밋하지 않습니다.
+백엔드의 `node.id`(또는 `LINK_NODE_ID`)는 Velocity의 서버 등록 이름과 일치해야 합니다. 모든 백엔드와 프록시는 같은 Link DB를 사용합니다. 시작 시 스키마를 초기화하므로 DB 계정에 필요한 권한이 있어야 합니다. 자격 증명은 저장소에 커밋하지 않습니다.
 
 ## 첫 템플릿
 
@@ -49,16 +78,16 @@ Linux/macOS에서는 `./gradlew`를 사용합니다. JAR은 `build/dist/`에 생
 ## Velocity 연결
 
 1. Velocity의 `plugins/`에 `Link-Velocity-dev.jar`를 설치합니다.
-2. 서버 목록에 백엔드를 등록합니다. 등록 이름은 각 `LINK_NODE_ID`와 같아야 합니다.
+2. 서버 목록에 백엔드를 등록합니다. 등록 이름은 각 백엔드의 `node.id`(또는 `LINK_NODE_ID`)와 같아야 합니다.
 3. 프록시의 modern forwarding과 온라인 인증을 설정합니다.
 4. 백엔드 Paper 설정에서 Velocity 지원과 프록시 `online-mode`를 활성화하고 forwarding secret을 동일하게 설정합니다. `server.properties`의 백엔드 `online-mode`와 Paper의 프록시 `online-mode`는 서로 다른 설정입니다. 프록시 인증을 사용하는 백엔드는 일반적으로 `server.properties`에서 `online-mode=false`를 사용합니다.
-5. 백엔드 포트에는 신뢰하는 프록시만 접근하도록 구성하고, 각 프로세스에 DB 환경 변수를 설정합니다.
+5. 백엔드 포트에는 신뢰하는 프록시만 접근하도록 구성하고, 백엔드는 `link.yml`, 프록시는 환경 변수로 DB 접속 정보를 설정합니다.
 
 `journal`은 백엔드의 Velocity 활성화·프록시 온라인 모드 설정·비어 있지 않은 secret을 검사합니다. 직접 백엔드 접속은 거부됩니다. 로컬 부하 검사는 루프백 offline-auth 프록시를 사용했으며 Mojang 인증 검증을 대신하지 않습니다.
 
 ## 백엔드 실행
 
-Minecraft EULA를 읽고 동의한 테스트 디렉터리에 서버 JAR을 복사한 뒤 실행합니다. 환경 변수와 forwarding 설정은 앞 단계에서 준비해야 합니다.
+Minecraft EULA를 읽고 동의한 테스트 디렉터리에 서버 JAR을 복사한 뒤 실행합니다. YAML 또는 환경 변수의 DB 설정과 forwarding 설정은 앞 단계에서 준비해야 합니다.
 
 ```powershell
 java -Xms512M -Xmx2G `

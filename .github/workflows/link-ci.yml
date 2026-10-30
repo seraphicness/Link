@@ -35,4 +35,4 @@ jobs:
       - run: git config --global user.name Link-CI && git config --global user.email link-ci@localhost
       - run: bash gradlew :link-core:test :link-api:jar --console=plain
       - run: bash gradlew applyAllPatches --console=plain
-      - run: bash gradlew :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite --console=plain
+      - run: bash gradlew :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests 'io.linkmc.server.Link*TestSuite' --console=plain
