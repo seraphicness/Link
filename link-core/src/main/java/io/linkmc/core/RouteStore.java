@@ -4,7 +4,7 @@ import io.linkmc.api.LinkApi.*;
 import java.util.*;
 import static io.linkmc.core.Database.*;
 
-/** The proxy requests travel; only the source backend may freeze/checkpoint its player. */
+/** Backend commands or plugins request travel; only the source backend may freeze/checkpoint its player. */
 public final class RouteStore {
     public record Request(UUID id,Reservation reservation){}
     private final Database db;

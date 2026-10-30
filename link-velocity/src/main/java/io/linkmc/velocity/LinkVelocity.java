@@ -7,7 +7,6 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.proxy.*;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.*;
-import com.velocitypowered.api.command.SimpleCommand;
 import io.linkmc.core.*;
 import io.linkmc.api.LinkApi.*;
 import net.kyori.adventure.text.Component;
@@ -43,13 +42,6 @@ public final class LinkVelocity {
             try{worker.execute(()->{try{dispatchReady();}catch(Exception e){logger.error("Link route dispatch failed",e);}finally{polling.set(false);}});}
             catch(RejectedExecutionException e){polling.set(false);}
         }).repeat(java.time.Duration.ofMillis(500)).schedule();
-        proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("spawn").plugin(this).build(),new SimpleCommand(){
-            public void execute(Invocation invocation){if(invocation.source() instanceof Player player)travel(player,null);}
-        });
-        proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("warp").plugin(this).build(),new SimpleCommand(){
-            public void execute(Invocation invocation){if(invocation.source() instanceof Player player&&invocation.arguments().length==1)travel(player,invocation.arguments()[0]);}
-            public boolean hasPermission(Invocation invocation){return invocation.source().hasPermission("link.warp");}
-        });
     }
     @Subscribe public EventTask initial(PlayerChooseInitialServerEvent event){
         return EventTask.withContinuation(continuation->{
@@ -75,18 +67,6 @@ public final class LinkVelocity {
     @Subscribe public void disconnected(DisconnectEvent event){
         travelling.remove(event.getPlayer().getUniqueId());
         try{worker.execute(()->cleanup(event.getPlayer().getUniqueId()));}catch(RejectedExecutionException ignored){}
-    }
-    private void travel(Player player,String warp){
-        UUID id=player.getUniqueId();if(!travelling.add(id))return;
-        try{worker.execute(()->{
-            try{
-                UUID ticket=UUID.randomUUID();Destination destination=warp==null?null:network.warp(warp).orElseThrow(()->new IllegalArgumentException("Unknown warp"));
-                Reservation reservation=network.reserve(id,ticket,destination);
-                pending.put(id,new Pending(ticket,reservation));
-                if(proxy.getServer(reservation.destination().node()).isEmpty())throw new IllegalStateException("Unregistered Link backend");
-                routes.request(ticket,reservation);
-            }catch(Exception e){logger.error("Link transfer failed",e);cleanup(id);travelling.remove(id);player.disconnect(Component.text("서버 이동을 완료하지 못했습니다. 잠시 후 다시 접속해 주세요."));}
-        });}catch(RejectedExecutionException e){travelling.remove(id);player.sendMessage(Component.text("이동 요청이 많습니다. 잠시 후 다시 시도해 주세요."));}
     }
     private void dispatchReady()throws Exception{
         var players=proxy.getAllPlayers().stream().map(Player::getUniqueId).toList();

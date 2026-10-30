@@ -11,7 +11,7 @@
 | `aspaper-server`의 NMS 패치와 `io.linkmc.server` | 프레임 경계, 플레이어 저장 대체, 월드 저장, 패킷 보류, 입장 처리 |
 | `link-core` | SQL 이벤트·스냅샷·outbox, 소유권, 입장권, 정원 예약, 템플릿 |
 | `link-api` | 백엔드·프록시 플러그인의 비동기 계약 |
-| `link-velocity` | 첫 입장 배정, `/spawn`, `/warp`, 백엔드 연결 |
+| `link-velocity` | 첫 입장 배정, 준비된 이동 요청의 백엔드 연결 전달 (명령어 없음) |
 | `link-integration` | 폐기 가능한 테스트 서버용 플러그인과 프로토콜 클라이언트 |
 
 PostgreSQL이 상태와 소유권의 기준입니다. Redis는 알림을 전달하며 인벤토리 원본이나 분산 잠금의 기준으로 사용하지 않습니다.
