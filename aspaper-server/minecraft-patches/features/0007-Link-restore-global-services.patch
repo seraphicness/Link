@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Link <link@localhost>
+Date: Fri, 30 Oct 2026 18:00:00 +0900
+Subject: [PATCH] Restore global services bypassed by slime bootstrap
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 53fe646..f5eb2fa 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -2524,6 +2524,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         return this.scoreboard;
+     }
+ 
++    public void linkRestoreSavedData() {
++        this.scoreboard.load(this.savedDataStorage.computeIfAbsent(ScoreboardSaveData.TYPE).getData());
++        this.commandStorage = new CommandStorage(this.savedDataStorage);
++        this.stopwatches = this.savedDataStorage.computeIfAbsent(Stopwatches.TYPE);
++    }
++
+     public CommandStorage getCommandStorage() {
+         if (this.commandStorage == null) {
+             throw new NullPointerException("Called before server init");

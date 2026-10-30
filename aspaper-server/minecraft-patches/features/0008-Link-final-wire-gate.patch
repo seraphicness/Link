@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Link <link@localhost>
+Date: Fri, 30 Oct 2026 18:45:00 +0900
+Subject: [PATCH] Hold fully framed output across compression changes
+
+diff --git a/net/minecraft/network/Connection.java b/net/minecraft/network/Connection.java
+index 5442099..a189167 100644
+--- a/net/minecraft/network/Connection.java
++++ b/net/minecraft/network/Connection.java
+@@ -745,11 +745,11 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         PacketFlow outboundDirection = inboundDirection.getOpposite();
+         boolean configureInbound = inboundDirection == PacketFlow.SERVERBOUND;
+         boolean configureOutbound = outboundDirection == PacketFlow.SERVERBOUND;
+-        pipeline.addLast(HandlerNames.SPLITTER, createFrameDecoder(monitor, local))
++        pipeline.addFirst("link_packet_gate", new io.linkmc.server.LinkPacketGate())
++            .addLast(HandlerNames.SPLITTER, createFrameDecoder(monitor, local))
+             .addLast(new FlowControlHandler())
+             .addLast(inboundHandlerName(configureInbound), configureInbound ? new PacketDecoder<>(INITIAL_PROTOCOL) : new UnconfiguredPipelineHandler.Inbound())
+             .addLast(HandlerNames.PREPENDER, createFrameEncoder(local))
+-            .addLast("link_packet_gate", new io.linkmc.server.LinkPacketGate())
+             .addLast(
+                 outboundHandlerName(configureOutbound), configureOutbound ? new PacketEncoder<>(INITIAL_PROTOCOL) : new UnconfiguredPipelineHandler.Outbound()
+             );

@@ -11,7 +11,10 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "ASPaper"
+rootProject.name = "Link"
+
+include(":link-api", ":link-core", ":link-velocity")
+include(":link-integration")
 
 include(":api")
 include(":core")

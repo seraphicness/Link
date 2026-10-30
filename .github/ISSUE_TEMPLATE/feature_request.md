@@ -1,14 +1,28 @@
 ---
-name: Feature request
-about: Suggest an idea for SWM
+name: Link 기능 제안
+about: Link 월드 엔진·데이터·API·멀티서버 기능 제안
 title: ''
 labels: enhancement
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is.
+## 해결하려는 문제
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+누가 어떤 상황에서 필요한 기능인지 설명해 주세요.
+
+## 원하는 동작
+
+입력·행동과 기대 결과를 구체적인 예시로 적어 주세요.
+
+## 적용 영역
+
+백엔드 / Velocity / 템플릿·월드 / 데이터 / 플러그인 API / 기타
+
+## 데이터와 장애 시 동작
+
+어떤 상태를 저장하거나 이전해야 하며, 이동·재시작·장애 시 어떤 결과를 기대하나요?
+
+## 완료 기준
+
+기능이 완성됐다고 판단할 재현 절차나 검증 항목을 적어 주세요.

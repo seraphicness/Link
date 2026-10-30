@@ -1,0 +1,38 @@
+name: Link validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: link_test
+          POSTGRES_PASSWORD: link_test_local
+          POSTGRES_DB: link_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U link_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+    env:
+      LINK_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/link_test
+      LINK_TEST_DB_USER: link_test
+      LINK_TEST_DB_PASSWORD: link_test_local
+      LINK_TEST_REDIS_URI: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - run: git config --global user.name Link-CI && git config --global user.email link-ci@localhost
+      - run: bash gradlew :link-core:test :link-api:jar --console=plain
+      - run: bash gradlew applyAllPatches --console=plain
+      - run: bash gradlew :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite --console=plain

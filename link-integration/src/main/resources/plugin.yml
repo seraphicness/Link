@@ -1,0 +1,10 @@
+name: LinkIntegrationProbe
+version: '0.1.0'
+main: io.linkmc.integration.LinkIntegrationProbe
+api-version: '26.3'
+commands:
+  linkprobe:
+    permission: link.integration
+permissions:
+  link.integration:
+    default: op
