@@ -1,248 +1,79 @@
-# Link 26.3 implementation and validation
+# Link 설계와 저장 경계
 
-Link is a patch-based ASP `dev/26.3` fork. `link.mode=journal` is an experimental
-native implementation, not a production release. `strict` deliberately refuses startup;
-`disabled` retains upstream behavior and `tools` provides template tooling with upstream
-player files. No zero-loss or zero-duplication guarantee is made.
+[README](../README.md) · [설치](setup.md) · [API](plugin-api.md) · [검증](validation.md)
 
-## Implemented paths
+현재 구현의 동작을 설명하는 문서입니다. 운영 적합성은 [검증 결과](validation.md)에 기록합니다. 아래 영속성 처리는 `journal` 모드에 해당합니다.
 
-- NMS patches wrap server ticks, server tasks, packet handling and chunk main-thread tasks.
-  A frame snapshots tracked players, all loaded slime worlds and Minecraft SavedData into
-  one PostgreSQL transaction. Blocks, block inventories and non-player entities are captured
-  through the SRF snapshot. Scheduled block/fluid ticks and POI serialization are enabled.
-- Player NBT, statistics, advancements, cursor and vanilla transient crafting/trading inputs
-  use SQL. Player `.dat`, statistics, advancement and SavedData file writes are bypassed in
-  journal mode. Global SavedData restoration starts before Minecraft creates clocks/maps.
-  World UUID, level overrides, gamerules, weather, timers and scoreboard state are included.
-- Encoded outbound bytes are held until commit, preserving channel order across adjacent
-  frames. Failure aborts pending packets and stops the backend. Live Java objects are not
-  rolled back in place. An uncertain SQL commit retries the identical operation UUID/payload.
-- Immutable versioned slime templates; editor, publish, clone, checkpoint, unload, load and
-  tombstone delete. Template exports include world SavedData without copying the editor UUID.
-  Native world catalog and unloaded checkpoints are retained. Deleted world names cannot be
-  reused, avoiding identity collisions with old saved data.
-- Native bootstrap uses the slime spawn template and skips vanilla secondary dimensions.
-  A bounded provisioner creates spare spawn clones and only registers them after creation.
-  Default world capacity is 50; default backend capacity is 150 and maximum spawn worlds is 3.
-  Backends are existing processes; Link does not provision machines or start more JVMs.
-- Velocity module: first login reserves a ready spawn, issues a single-use SQL arrival ticket,
-  and selects the matching backend. NMS consumes the ticket and sets the reserved first-spawn
-  position after spawn-location callbacks. Modern forwarding with an online-mode proxy identity
-  and nonempty secret is required by journal backends.
-- `/spawn`, `/warp <name>` and plugin travel requests use source checkpoint/freeze, fenced
-  ownership transfer, destination admission and proxy routing. Same-backend travel teleports
-  locally. The proxy observes READY only after the final native frame commits. SQL occupancy
-  counts both reservations and admitted players. Reservation coordinates are immutable.
-- DB-clock leases and epochs fence stale writers. Expired unclaimed transfers can reconnect
-  with a new epoch; old transfer acceptance is rejected. Recovery may require waiting for
-  the 30-second lease. Redis is an optional at-least-once outbox notification relay, never
-  the source of truth for inventory or ownership. Redis failure retains the SQL outbox.
+## 구성 요소
 
-## Scope and remaining validation
+| 구성 요소 | 역할 |
+| --- | --- |
+| `aspaper-server`의 NMS 패치와 `io.linkmc.server` | 프레임 경계, 플레이어 저장 대체, 월드 저장, 패킷 보류, 입장 처리 |
+| `link-core` | SQL 이벤트·스냅샷·outbox, 소유권, 입장권, 정원 예약, 템플릿 |
+| `link-api` | 백엔드·프록시 플러그인의 비동기 계약 |
+| `link-velocity` | 첫 입장 배정, `/spawn`, `/warp`, 백엔드 연결 |
+| `link-integration` | 폐기 가능한 테스트 서버용 플러그인과 프로토콜 클라이언트 |
 
-The implementation journals after-state snapshots, not a separate semantic event for every
-mouse click. Ordering is enforced per aggregate/session and atomic frame, not a universal
-wall-clock order across independent backends. Plugin HTTP calls, files, custom databases and
-other external effects are outside a native frame.
+PostgreSQL이 상태와 소유권의 기준입니다. Redis는 알림을 전달하며 인벤토리 원본이나 분산 잠금의 기준으로 사용하지 않습니다.
 
-Whole-world serialization and synchronous SQL commits on the main thread favor a clear
-experimental boundary over throughput. SQL uses bounded HikariCP pools with connection/socket
-timeouts. Large worlds/player counts, incremental snapshots, event retention, outbox trimming and production observability need
-further work. This mode must not host valuable player inventories yet.
+## 네이티브 프레임
 
-Real-player click/drag/crafting/trading/hopper/pickup/death/disconnect and multi-backend transfer
-crash matrices have not all passed end to end. Arbitrary plugin virtual inventories and
-async mutation of Bukkit/NMS objects are not supported. Passenger/vehicle and ender-pearl
-association restoration needs additional work: duplicate entity creation from player NBT
-is suppressed, but restoring those relationships is not yet validated. Multi-node map ID
-allocation/map contents are node-local, not yet a network-global map service.
+1. 서버 틱, 서버 작업, 패킷 처리, 청크의 메인 스레드 작업을 프레임으로 감쌉니다. 중첩 작업은 바깥 프레임에 포함됩니다.
+2. 추적 중인 플레이어, 로드된 Slime 월드, Minecraft SavedData를 수집합니다.
+3. 이전 커밋과 다른 상태를 한 SQL 트랜잭션에 기록합니다. 소유권과 예상 버전을 검사하고 이벤트·스냅샷·outbox를 함께 저장합니다.
+4. 커밋에 성공하면 보류한 출력과 완료 콜백을 해제합니다.
 
-Global and slime-world SavedData use stable logical node/world namespaces. Earlier path-hashed
-entries are migrated during checkpoint; auxiliary plugin-created storage paths can still be
-path-dependent. Existing player-file import, backups/PITR,
-whole-network rollback policy, idle spawn cleanup and schema-version migration tools remain
-unimplemented. Do not restore a single world independently of player state.
+압축·프레이밍을 마친 바이트를 보류하므로 나중에 변경되는 인벤토리 객체나 압축 설정이 이미 캡처한 출력에 영향을 주지 않습니다. 프로토콜 전환 제어 작업은 즉시 처리합니다.
 
-## Build and automated checks
+실패하면 보류 출력을 폐기하고 백엔드를 중단합니다. Java 객체를 메모리에서 원복하지 않습니다. 커밋 응답이 불확실하면 같은 작업 UUID와 같은 내용을 재시도해 중복 기록을 방지합니다.
 
-Java 25 is required. Integration tests use PostgreSQL 17 and Redis 7. `LINK_TEST_*` must point
-to a disposable database: tests truncate Link tables.
+## 저장 대상
 
-```powershell
-$env:LINK_TEST_JDBC_URL='jdbc:postgresql://127.0.0.1:55432/link_test'
-$env:LINK_TEST_DB_USER='link_test'
-$env:LINK_TEST_DB_PASSWORD='link_test_local'
-$env:LINK_TEST_REDIS_URI='redis://127.0.0.1:56379'
-.\gradlew.bat :link-core:test
-.\gradlew.bat applyAllPatches
-.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite
-.\gradlew.bat :aspaper-server:createPaperclipJar
-```
+| 대상 | 저장 내용 |
+| --- | --- |
+| 플레이어 | NBT, 인벤토리, 엔더 상자, 통계, 발전 과제 |
+| 열린 메뉴 | 커서, 지원하는 바닐라 제작·거래 등의 임시 입력. 파생 결과 슬롯은 중복 저장하지 않음 |
+| 월드 | SRF 스냅샷의 블록, 블록 인벤토리, 비플레이어 엔티티, 예약된 블록·유체 틱, POI |
+| SavedData | 전역·월드 데이터, 스코어보드, 타이머 등 |
+| 식별과 설정 | 월드 목록, UUID·레벨 설정, 언로드한 체크포인트, 삭제 표시 |
 
-Do not combine `applyPaperSingleFilePatches` and `applyAllServerPatches` in one invocation:
-an upstream implicit-dependency validation issue affects that combination. Windows Git long
-paths must be enabled in generated resource repositories too.
+플레이어 `.dat`, 통계·발전 과제·SavedData 파일 쓰기를 우회하며, 해당 패치 경로에서 바닐라 `level.dat` 로드·저장도 우회합니다. 로그, 서버 설정, 플러그인이 직접 쓰는 파일까지 SQL로 변환하지는 않습니다.
 
-Checks exercise multi-aggregate rollback, idempotent commits, uncertain commit retry, stale
-owners, admission rollback, single-use arrival tickets, transfer expiry/recovery, concurrent
-capacity allocation and route dispatch, immutable warp coordinates, segmented snapshot
-integrity, Redis redelivery, packet withholding, abort buffer release and adjacent-frame order.
-These tests are not a substitute for real-player and chaos validation.
+전역·Slime 월드 SavedData는 노드·월드 이름 기반 논리 키를 사용합니다. 초기 개발 버전의 경로 해시 키는 체크포인트에서 이전합니다. 플러그인이 별도로 만든 저장 경로는 경로에 종속될 수 있습니다.
 
-`link-integration` is a separate disposable-server probe plugin, never bundled into Link.
-It requires a `test-*` node ID. Console `linkprobe prepare` stores a chest inventory, equipped
-armor stand, world PDC and scoreboard; `linkprobe verify` checks recovery after restart.
-`:link-integration:seedTemplate` creates an empty SRF template only in a database named
-`link_runtime_test`. Accept the Minecraft EULA explicitly before running a test server.
+## 이벤트와 순서
 
-Runtime checks on 2026-10-30 used two Minecraft 26.3 JVMs, PostgreSQL 17 and Redis 7:
+이벤트는 각 클릭을 의미 단위로 기록한 명령 로그가 아니라 **변경 후 상태**입니다. 이력 재생 시 게임 로직이나 플러그인 콜백을 다시 실행하지 않습니다.
 
-- Forced JVM termination and restart restored a chest with seven diamonds, an equipped
-  armor stand, world PDC and the global scoreboard.
-- A native `ChestMenu` pickup moved seven diamonds onto a synthetic player's cursor.
-  After forced termination, recovery returned exactly seven to the player, left the chest
-  empty, and restored health, experience level and ender-chest contents.
-- A synthetic native player transferred between two live backends, retained those values
-  and arrived at the reserved coordinates. SQL recorded accepted ownership at a new epoch.
-- Stopping PostgreSQL during live frames stopped both backend JVMs. Neither continued
-  gameplay with uncommitted memory state.
-- A TCP protocol client connected through Velocity 4.3.1, entered backend A, changed to
-  backend B through configuration/play transitions, and arrived at `(8,66,8)` with yaw 90.
-  Seven diamonds, three ender-chest emeralds, level 9 and health 13 were verified on B.
-  Same-backend travel also passed. SQL recorded `COMPLETE` and the destination's active epoch.
-  Both test worlds used normal difficulty to prevent peaceful-mode healing changing health.
-- With that TCP client connected, backend B's JVM was forcibly terminated. After lease
-  expiry, reconnecting through Velocity admitted the player on A at its spawn, restored
-  the same inventory/ender chest/level/health, and acquired a newer active ownership epoch.
+- 상태별 예상 버전으로 경쟁 쓰기를 검사합니다.
+- 작업 UUID와 내용 검증으로 동일 요청의 재시도를 식별합니다.
+- DB 시각 기반 lease와 증가하는 epoch로 이전 소유자의 쓰기를 차단합니다.
+- 한 프레임의 여러 상태를 원자적으로 커밋합니다.
 
-The automated suite passed 29 core tests (23 against real PostgreSQL/Redis) and five Netty
-gate tests, with no skips. All eight Minecraft feature patches reapplied successfully.
+독립된 백엔드의 모든 작업에 하나의 전역 시간 순서를 부여하지 않습니다. Redis 알림은 중복·순서 변경이 가능하므로 소비자는 SQL 상태 버전을 다시 확인해야 합니다.
 
-### Expanded validation (2026-10-30)
+## 템플릿과 스폰
 
-Additional fixtures use real connected players but invoke NMS menu methods on the server
-thread. They are not a graphical-client input or third-party-plugin compatibility suite.
-`linkprobe matrix-menus` checks split/left clicks, shift move, hotbar swap, drag distribution,
-crafting output, merchant trade and item pickup. All seven passed. Removed entities are not
-called a second time: the first draft of the fixture incorrectly invoked `playerTouch` on
-an already discarded Java object and was corrected to match world collision semantics.
+템플릿은 이름·버전으로 발행하며 같은 버전을 다른 내용으로 덮어쓰지 않습니다. 편집 월드에서 내보낼 때 SavedData를 포함하되 편집 월드 UUID는 복사하지 않습니다.
 
-| Check | Result | Evidence / boundary |
-| --- | --- | --- |
-| Crafting input + cursor after forced JVM exit | PASS | Exactly five diamonds and three emeralds recovered |
-| Chest + running hopper after forced JVM exit | PASS | Eleven chest diamonds; hopper/destination total sixteen iron ingots |
-| Equipped entity after forced JVM exit | PASS | Exactly one tagged armor stand with its helmet |
-| Death and respawn | PASS | Seven new nether stars dropped, old inventory cleared, respawn alive |
-| Public world API lifecycle | PASS | Editor → publish → clone → save → unload → load → delete retains the template block |
-| Ender pearl persistence | PASS | One pearl, correct shooter, player ticket registration after restart |
-| Vehicle entity persistence | PASS | Exactly one original boat after restart |
-| Player mounted relationship | **FAIL** | Player reconnects dismounted; `RootVehicle` is suppressed by the codec |
-| Map pixels across backends | **FAIL** | Map item survives A→B but B has no original saved map pixels |
-| Transfer boundary recovery | PASS | Six additional SQL cases: checkpoint, prepared, issued, ready, dispatched, accepted; stale writers fenced |
-| 51 protocol clients / capacity | PASS | All 51 joined without errors; one backend distributed 50 + 1 across spawn worlds |
-| 51-client performance | **FAIL** | One-minute TPS fell to 4.6; not suitable for the requested operating scale |
-| Direct backend connection | PASS | Modern-forwarding backend rejected a connection without Velocity |
-| Capacity release on disconnect | PASS | Zero ADMITTED reservations after all 51 clients disconnected |
-| Aborted native frame | PASS | After setting inventory to 99 and replacing the chest, injected exception stopped the backend; restart restored inventory 7 and chest 11 |
-| Redis unavailable during startup | **FIXED / PASS** | Previously aborted startup; deferred notification connection now allows startup while Redis is down |
-| Redis outage after connection | PASS | Backend stayed responsive and renewed DB ownership beyond one lease period; delivery resumed after Redis returned |
+스폰 생성기는 템플릿 인스턴스를 만든 뒤 채널로 등록합니다. 기본값은 월드당 50명, 노드당 150명, 최대 스폰 월드 3개입니다. 예약자와 입장자를 함께 계산하며, 기존 플레이어가 같은 월드로 워프할 때 자리를 중복 차지하지 않도록 처리합니다.
 
-The expanded automated suite has 40 passing tests without skips: 29 PostgreSQL/Redis cases,
-four frame-commit tests, two segmented-snapshot tests and five Netty gate tests. The six new
-transfer boundary cases are database state-machine tests, not six separate live JVM kills.
-Redis initialization/retry now runs on `Link-Notifications`, separate from the lease heartbeat
-and server bootstrap; durable outbox rows remain pending during failures. Runtime probes
-record `MATRIX_PASS` / `MATRIX_FAIL` separately from transaction completion.
+모든 자리와 생성 한도가 소진되면 입장을 거부합니다. 영속 대기열, 유휴 스폰 정리, 백엔드 프로세스 생성은 미구현입니다. 삭제된 월드 이름은 이전 저장 상태와의 혼동을 막기 위해 재사용할 수 없습니다.
 
-Load environment: Windows 11, Java 25, one backend with `-Xmx2G`, local Docker PostgreSQL 17,
-Velocity 4.3.1, 51 idle protocol clients launched four seconds apart, then held for 60 seconds.
-The backend had its two spawn worlds and an earlier editor world loaded. There was no local
-Gradle build during measurement. Observed one-minute TPS: 18.3 at 9 clients, 11.0 at 21,
-7.5 at 33, 6.2 at 41, 5.1 at 50 and 4.6 at 51. These are moving averages during a ramp,
-not steady-state capacity claims. `/mspt` does not account for all surrounding journal work;
-its low values must not be used to override the observed wall-clock TPS loss.
+## 입장과 이동
 
-Run `node link-integration/load-clients.cjs 51 4000 60000` only against the disposable loopback
-proxy after whitelisting the offline UUIDs of LinkLoad0 through LinkLoad50 and setting the
-test backend's max-players above 51. Results are written under ignored `build/load-clients/`.
+첫 입장은 채널 예약과 일회용 입장권을 거칩니다. 백엔드는 입장권 소비와 소유권 획득을 처리하고 예약된 월드·좌표·방향을 적용합니다. 스폰 위치 콜백 이후에도 예약 목적지를 적용합니다.
 
-This matrix is deliberately not “everything passed.” The mounted relationship, cross-node
-map service and throughput failures remain release blockers. Online Mojang authentication,
-arbitrary plugin virtual menus, async plugin writes, production-size maps and long-running
-mixed gameplay/network-partition matrices have not been certified.
+서버 이동은 목적지 예약 → 원본 메뉴 닫기와 최종 체크포인트 → 플레이어 동결·이전 준비 → 후속 프레임 커밋 → `READY` → 프록시의 `CONNECTING` 선점 → 목적지 입장권 소비·새 epoch 획득 순서입니다. 같은 백엔드 이동은 로컬 텔레포트로 처리합니다.
 
-The separate `link-integration/wire-client.cjs` derives packet IDs from the patched 26.3
-sources and exercises a real TCP connection through Velocity. It requires a disposable
-loopback offline-auth proxy on port 25594 and a whitelisted `LinkWire` offline UUID.
-This harness does not test Mojang authentication, rendering or all inventory interactions.
-The probe commands `platform`, `wire-prepare`, `wire-transfer` and `wire-verify` are console
-only; never install this probe on a production backend.
+미완료 이동은 lease 만료 후 재접속으로 회복할 수 있습니다. 기본 lease는 30초이므로 즉시 재접속·재시작이 거부될 수 있습니다.
 
-## Backend and proxy configuration
+## 장애와 경계
 
-Set `LINK_JDBC_URL`, `LINK_DB_USER`, `LINK_DB_PASSWORD`, `LINK_NODE_ID` for each backend.
-Optionally set `LINK_REDIS_URI`. Keep credentials out of source control and command-line flags.
-Every node ID must match its configured Velocity backend name and be unique while running.
-The proxy uses the same SQL environment variables and the `link-velocity` shaded jar.
-Configure Velocity modern forwarding and the matching backend secret; backend server ports
-must only be reachable by trusted proxies. SQL credentials are trusted engine credentials.
+Redis 연결·전송 재시도는 `Link-Notifications`에서 수행해 초기화와 lease 갱신을 막지 않습니다. 미전달 outbox는 SQL에 남깁니다. SQL 커밋이나 소유권을 유지할 수 없으면 게임 진행을 중단합니다.
 
-Publish a valid template before native startup:
+전체 월드 직렬화와 메인 스레드 동기 SQL 비용이 크며 51명 검사에서 TPS 4.6을 관측했습니다. 탑승 관계와 서버 간 지도 데이터 복원도 실패했습니다. 엔더 진주 소유자·등록은 단일 백엔드 재시작 검사에서 통과했으며 모든 이동 조합을 검증한 것은 아닙니다.
 
-```powershell
-.\gradlew.bat :link-core:publishTemplate -PtemplateName=lobby -PtemplateVersion=1 -PtemplateFile=C:/maps/lobby.slime
-```
+외부 HTTP, 플러그인의 별도 DB·파일, 임의 가상 인벤토리, 비동기 Bukkit/NMS 변경은 프레임의 원자성 범위 밖입니다. 기존 플레이어 파일 가져오기, 스키마 버전 이전 도구, 이벤트 보존·정리, 백업/PITR 및 전체 네트워크 복구 절차도 미완료입니다. 플레이어와 월드를 서로 다른 시점으로 독립 복원하면 안 됩니다.
 
-Backend JVM options:
-
-```text
--Dlink.mode=journal
--Dlink.spawn.template=lobby
--Dlink.spawn.version=1
--Dlink.spawn.capacity=50
--Dlink.node.capacity=150
--Dlink.spawn.max-worlds=3
-```
-
-There is no vanilla fallback when template/database startup fails. Capacity exhaustion rejects
-admission until a spare world/backend is ready; there is no durable waiting queue yet.
-
-`link.admin` (OP by default) grants `/link templates|worlds|editor|publish|create|load|save|unload|delete`.
-`/link create <name> <template> <version> <persistent|temporary>` clones a template.
-`/link publish <editor> <template> <version>` publishes an immutable version.
-The proxy `/warp <name>` requires `link.warp`; warp destinations are configured through the API.
-
-## Plugin API
-
-Compile against `io.linkmc:link-api:0.1.0-SNAPSHOT`, or the Link API which exports it. Do not
-shade another copy. Obtain `io.linkmc.api.Link.api()` after server initialization. Never join
-an asynchronous API future on the Minecraft thread.
-
-```java
-var link = io.linkmc.api.Link.api();
-link.worlds().createEditor("lobby-editor");
-// Await dependent operations before publishing/cloning.
-link.worlds().publish("lobby-editor", "lobby", 2);
-link.network().setWarp("shop", new io.linkmc.api.LinkApi.Destination(
-    "node-a", "link-spawn", 10, 65, 10, 0, 0));
-link.network().requestTravel(playerId, operationId, null); // null selects a spawn
-link.network().travelStatus(operationId); // asynchronous status
-link.engine().transact(() -> {
-    // Bukkit inventory/block/entity mutations on the native main thread.
-    // Completion means the containing frame committed; failure stops the backend.
-});
-```
-
-Worlds exposes editor/publish/create/load/save/unload/delete/loaded/templates. Network exposes
-channels, registerChannel, setChannelReady, reserve (optional exact destination), cancel,
-warp/setWarp and travel request/status. Register channels only after their world is loaded and
-mark them unavailable before unloading. Engine exposes journalEnabled and transact. Data
-exposes read/commit/history for plugin-owned namespaces; writes to `player:` and `native:` are
-rejected through the raw plugin facade. Sessions exposes low-level fenced ownership operations;
-ordinary gameplay plugins should use travel rather than manipulating live engine leases.
-
-PostgreSQL durable WAL, storage and replication determine the actual failure model. A local
-SQL commit cannot guarantee survival of total database-host loss. Redis notifications may be
-duplicated or reordered; consumers compare SQL revisions. Strict mode stays disabled until
-runtime, recovery, performance and compatibility requirements are demonstrated.
+내구성은 PostgreSQL WAL·스토리지·복제 설정의 장애 모델에 의존합니다. 로컬 커밋만으로 DB 호스트 전체 손실까지 보장하지는 않습니다.

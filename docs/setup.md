@@ -1,0 +1,96 @@
+# 설치와 실행
+
+[README](../README.md) · [설계](link-implementation.md) · [API](plugin-api.md) · [검증](validation.md)
+
+현재는 격리된 개발·검증 환경용입니다. 운영 적합성 검증은 실패 상태입니다.
+
+## 빌드
+
+Java 25와 Git이 필요합니다. DB·프록시 검증에는 PostgreSQL 17, Redis 7, Velocity 4.3.1을 사용했습니다. Redis는 선택 사항입니다.
+
+```powershell
+.\gradlew.bat applyAllPatches
+.\gradlew.bat linkDist
+```
+
+Linux/macOS에서는 `./gradlew`를 사용합니다. JAR은 `build/dist/`에 생성됩니다. 패치 작업과 Windows 긴 경로 설정은 [개발 가이드](../CONTRIBUTING.md)를 참고하세요.
+
+## 실행 모드
+
+| `-Dlink.mode=` | 동작 |
+| --- | --- |
+| `disabled` | 기본값. Upstream 동작 유지 |
+| `tools` | 템플릿 도구 사용. Upstream 플레이어 파일 저장 유지 |
+| `journal` | 실험적 네이티브 SQL 저장과 입장·이동 처리 |
+| `strict` | 검증 미완료로 시작 거부 |
+
+## 환경 변수
+
+| 변수 | 대상 | 의미 |
+| --- | --- | --- |
+| `LINK_JDBC_URL` | 백엔드·프록시 | 예: `jdbc:postgresql://127.0.0.1:5432/link` |
+| `LINK_DB_USER` | 백엔드·프록시 | DB 계정 |
+| `LINK_DB_PASSWORD` | 백엔드·프록시 | DB 비밀번호 |
+| `LINK_NODE_ID` | 백엔드 | 실행 중인 다른 노드와 중복되지 않는 이름 |
+| `LINK_REDIS_URI` | 백엔드, 선택 | 예: `redis://127.0.0.1:6379` |
+
+백엔드의 `LINK_NODE_ID`는 Velocity의 서버 등록 이름과 일치해야 합니다. 모든 백엔드와 프록시는 같은 Link DB를 사용합니다. 시작 시 스키마를 초기화하므로 DB 계정에 필요한 권한이 있어야 합니다. 자격 증명은 저장소에 커밋하지 않습니다.
+
+## 첫 템플릿
+
+`journal` 시작 전에 호환되는 SRF `.slime` 파일을 준비하고, DB 환경 변수가 설정된 셸에서 발행합니다.
+
+```powershell
+.\gradlew.bat :link-core:publishTemplate -PtemplateName=lobby -PtemplateVersion=1 -PtemplateFile=C:/maps/lobby.slime
+```
+
+템플릿 버전은 다른 내용으로 덮어쓸 수 없습니다. 수정본은 버전을 올려 발행하세요. 서버가 실행된 뒤에는 `/link editor`와 `/link publish`로 새 템플릿을 제작할 수 있습니다. 테스트용 빈 템플릿 생성기는 `link_runtime_test` DB에서만 동작하며 일반 템플릿 준비 절차를 대신하지 않습니다.
+
+## Velocity 연결
+
+1. Velocity의 `plugins/`에 `Link-Velocity-dev.jar`를 설치합니다.
+2. 서버 목록에 백엔드를 등록합니다. 등록 이름은 각 `LINK_NODE_ID`와 같아야 합니다.
+3. 프록시의 modern forwarding과 온라인 인증을 설정합니다.
+4. 백엔드 Paper 설정에서 Velocity 지원과 프록시 `online-mode`를 활성화하고 forwarding secret을 동일하게 설정합니다. `server.properties`의 백엔드 `online-mode`와 Paper의 프록시 `online-mode`는 서로 다른 설정입니다. 프록시 인증을 사용하는 백엔드는 일반적으로 `server.properties`에서 `online-mode=false`를 사용합니다.
+5. 백엔드 포트에는 신뢰하는 프록시만 접근하도록 구성하고, 각 프로세스에 DB 환경 변수를 설정합니다.
+
+`journal`은 백엔드의 Velocity 활성화·프록시 온라인 모드 설정·비어 있지 않은 secret을 검사합니다. 직접 백엔드 접속은 거부됩니다. 로컬 부하 검사는 루프백 offline-auth 프록시를 사용했으며 Mojang 인증 검증을 대신하지 않습니다.
+
+## 백엔드 실행
+
+Minecraft EULA를 읽고 동의한 테스트 디렉터리에 서버 JAR을 복사한 뒤 실행합니다. 환경 변수와 forwarding 설정은 앞 단계에서 준비해야 합니다.
+
+```powershell
+java -Xms512M -Xmx2G `
+  -Dlink.mode=journal `
+  -Dlink.spawn.template=lobby `
+  -Dlink.spawn.version=1 `
+  -Dlink.spawn.capacity=50 `
+  -Dlink.node.capacity=150 `
+  -Dlink.spawn.max-worlds=3 `
+  -jar Link-26.3-dev.jar --nogui
+```
+
+위 메모리와 정원은 실행 예시이며 검증된 운영 권장 사양이 아닙니다. 템플릿·DB 초기화 실패 시 바닐라 월드로 대체하지 않습니다. 종료·장애 직후에는 이전 lease 만료까지 같은 노드의 시작이 거부될 수 있습니다.
+
+## 명령어
+
+백엔드 관리 명령에는 `link.admin` 권한이 필요하며 기본값은 OP입니다. 완료 메시지를 확인한 뒤 의존하는 다음 명령을 실행하세요.
+
+| 명령 | 기능 |
+| --- | --- |
+| `/link templates` | 템플릿 조회 |
+| `/link worlds` | 로드된 관리 월드 조회 |
+| `/link editor <name>` | 빈 편집 월드 생성 |
+| `/link publish <editor> <template> <version>` | 템플릿 발행 |
+| `/link create <name> <template> <version> <persistent 또는 temporary>` | 템플릿 복제. 마지막 인수는 둘 중 하나 |
+| `/link save <name>` | 체크포인트 저장 |
+| `/link unload <name>` | 언로드 |
+| `/link load <name>` | 저장한 월드 로드 |
+| `/link delete <name>` | 삭제 표시. 이름 재사용 불가 |
+
+예: `/link create lobby-2 lobby 1 persistent`.
+
+프록시의 `/spawn`은 스폰 이동을 요청합니다. `/warp <name>`에는 `link.warp` 권한이 필요합니다. 워프 목적지는 현재 API의 `setWarp`로 등록합니다. 월드 언로드는 플레이어 유무와 기본 월드 보호 등 엔진의 검사를 따릅니다.
+
+`link-integration`은 일반 서버에 설치하지 마세요. 월드·아이템을 변경하거나 의도적으로 서버를 중단하는 검사 명령이 포함됩니다.
