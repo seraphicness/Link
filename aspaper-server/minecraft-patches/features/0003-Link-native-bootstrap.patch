@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Link <link@localhost>
+Date: Fri, 30 Oct 2026 16:00:00 +0900
+Subject: [PATCH] Link native bootstrap and shutdown
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -609,6 +609,8 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTask
+         ProfiledDuration profiledDuration = JvmProfiler.INSTANCE.onWorldLoadedStarted();
+         // Paper start - rework world loading process
+         io.papermc.paper.world.PaperWorldLoader loader = io.papermc.paper.world.PaperWorldLoader.create(this, levelId);
++        io.linkmc.server.LinkRuntime.beforeWorlds(); // Link: prepare the template before loading any world
+         loader.loadInitialWorlds();
++        io.linkmc.server.LinkRuntime.afterWorlds(); // Link tooling commands
+         // Paper end - rework world loading process
+         if (profiledDuration != null) {
+@@ -1056,6 +1058,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTask
+         // Paper end - rewrite chunk system
+ 
+         this.saveAllChunks(false, true, false, true); // Paper - rewrite chunk system
++        io.linkmc.server.LinkRuntime.stop(); // Link
+ 
+         this.isSaving = false;
+         this.savedDataStorage.close();

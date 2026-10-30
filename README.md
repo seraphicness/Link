@@ -1,4 +1,14 @@
-# Advanced Slime Paper (ASWM) [![Build Status](https://ci.infernalsuite.com/app/rest/builds/buildType:(id:AdvancedSlimePaper_Build)/statusIcon)](https://ci.infernalsuite.com/viewType.html?buildTypeId=AdvancedSlimePaper_Build&guest=1)
+# Link — Minecraft 26.3
+
+Link is a patch-based fork of AdvancedSlimePaper `dev/26.3`.
+The Link engine is under development: the current code provides transactional storage,
+session fencing, template tooling and plugin API foundations. **Full native player/world
+transactions and Velocity routing are not implemented; this is not a production release.**
+
+See [implementation status, build instructions and plugin API](docs/link-implementation.md).
+Strict gameplay mode refuses startup until the remaining NMS integration is implemented.
+
+## Upstream Advanced Slime Paper
 
 [<img src="https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0b5061df29d55a92d945_full_logo_blurple_RGB.svg" alt="" height="55" />](https://discord.gg/YevvsMa)
 

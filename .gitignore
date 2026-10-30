@@ -17,3 +17,6 @@ paper-api-generator/
 aspaper-server/.gradle/
 
 .checkstyle
+paper-checkstyle/
+*-setup.log
+link-test.log
