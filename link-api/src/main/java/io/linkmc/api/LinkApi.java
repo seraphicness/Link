@@ -18,6 +18,18 @@ public interface LinkApi {
     Network network();
     /** Available on a Link backend; proxies only expose data/session/network services. */
     default Worlds worlds() { throw new IllegalStateException("No world engine on this node"); }
+    default Engine engine() { throw new IllegalStateException("No native engine on this node"); }
+
+    interface Engine {
+        boolean journalEnabled();
+        /**
+         * Executes on the server thread, completing only after the containing native
+         * frame commits. Do not join on the tick thread. Mutation failure fences and
+         * stops the backend; it does not roll Java objects back in place. External
+         * side effects (HTTP, files, another plugin's database) are not transactional.
+         */
+        CompletionStage<Void> transact(Runnable mutation);
+    }
 
     interface Worlds {
         CompletionStage<List<String>> templates();
@@ -50,10 +62,17 @@ public interface LinkApi {
 
     interface Network {
         CompletionStage<List<Channel>> channels();
+        CompletionStage<Void> registerChannel(String id, Destination spawn, int capacity);
+        CompletionStage<Void> setChannelReady(String id, boolean ready);
         CompletionStage<Reservation> reserve(UUID player, UUID request);
+        CompletionStage<Reservation> reserve(UUID player, UUID request, Destination destination);
         CompletionStage<Void> cancel(UUID reservation, UUID player);
         CompletionStage<Optional<Destination>> warp(String name);
         CompletionStage<Void> setWarp(String name, Destination destination);
+        /** Enqueues native source checkpoint and proxy travel; null destination allocates a spawn. */
+        CompletionStage<Reservation> requestTravel(UUID player, UUID operation, Destination destination);
+        /** REQUESTED, READY, CONNECTING, COMPLETE, FAILED or MISSING. */
+        CompletionStage<String> travelStatus(UUID operation);
     }
 
     record Destination(String node, String world, double x, double y, double z, float yaw, float pitch) {

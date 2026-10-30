@@ -1,142 +1,195 @@
-# Link 26.3 — implementation status
+# Link 26.3 implementation and validation
 
-This branch contains a **development foundation, not the complete requested gameplay engine**.
-It must not be deployed with valuable player inventories. Strict mode intentionally refuses
-startup. Default mode is disabled and retains upstream ASP behavior.
+Link is a patch-based ASP `dev/26.3` fork. `link.mode=journal` is an experimental
+native implementation, not a production release. `strict` deliberately refuses startup;
+`disabled` retains upstream behavior and `tools` provides template tooling with upstream
+player files. No zero-loss or zero-duplication guarantee is made.
 
-## Implemented and independently testable
+## Implemented paths
 
-- `link-api`: Java 25, Minecraft-independent asynchronous plugin contracts; server API
-  transitively exports this module. Do not shade another copy of it into a plugin.
-- PostgreSQL after-state event log and current snapshots, atomically committed with an outbox.
-  Aggregate revisions use optimistic concurrency; multi-aggregate writes commit together.
-- Operation UUID plus canonical SHA-256 request digest. Identical retries return the original
-  result, while reusing an ID with different content is rejected.
-- DB-clock player/node leases, epoch fencing, prepare/accept transfer state machine. Prepared
-  transfers freeze source writes. The destination and final player revision are stored in SQL.
-- SQL channel reservations enforce per-channel and per-node capacities, including in-flight
-  arrivals. Old admission is released only when the new owner admits the player.
-- Immutable versioned SRF template blobs with integrity checks; SQL warp destinations.
-- At-least-once Redis Stream outbox relay. Redis messages are hints, not state or ownership.
-  Delivery may be duplicated or out of order; consumers reread SQL versions.
-- A world lifecycle API and native ASP adapter: editor world, template publish, clone,
-  explicit checkpoint, load, unload and tombstone delete. Temporary clones never overwrite
-  published templates. Persistent checkpoints are node-scoped and capped at 16 MiB by the
-  current event store. These checkpoints are NOT atomic with native player state.
-- NMS bootstrap/shutdown feature patch and a Paper world-loader patch that skips vanilla
-  secondary dimensions in tooling mode. Server artifact branding is Link.
-- A bounded spawn provisioner component, not yet a running network controller.
+- NMS patches wrap server ticks, server tasks, packet handling and chunk main-thread tasks.
+  A frame snapshots tracked players, all loaded slime worlds and Minecraft SavedData into
+  one PostgreSQL transaction. Blocks, block inventories and non-player entities are captured
+  through the SRF snapshot. Scheduled block/fluid ticks and POI serialization are enabled.
+- Player NBT, statistics, advancements, cursor and vanilla transient crafting/trading inputs
+  use SQL. Player `.dat`, statistics, advancement and SavedData file writes are bypassed in
+  journal mode. Global SavedData restoration starts before Minecraft creates clocks/maps.
+  World UUID, level overrides, gamerules, weather, timers and scoreboard state are included.
+- Encoded outbound bytes are held until commit, preserving channel order across adjacent
+  frames. Failure aborts pending packets and stops the backend. Live Java objects are not
+  rolled back in place. An uncertain SQL commit retries the identical operation UUID/payload.
+- Immutable versioned slime templates; editor, publish, clone, checkpoint, unload, load and
+  tombstone delete. Template exports include world SavedData without copying the editor UUID.
+  Native world catalog and unloaded checkpoints are retained. Deleted world names cannot be
+  reused, avoiding identity collisions with old saved data.
+- Native bootstrap uses the slime spawn template and skips vanilla secondary dimensions.
+  A bounded provisioner creates spare spawn clones and only registers them after creation.
+  Default world capacity is 50; default backend capacity is 150 and maximum spawn worlds is 3.
+  Backends are existing processes; Link does not provision machines or start more JVMs.
+- Velocity module: first login reserves a ready spawn, issues a single-use SQL arrival ticket,
+  and selects the matching backend. NMS consumes the ticket and sets the reserved first-spawn
+  position after spawn-location callbacks. Modern forwarding with an online-mode proxy identity
+  and nonempty secret is required by journal backends.
+- `/spawn`, `/warp <name>` and plugin travel requests use source checkpoint/freeze, fenced
+  ownership transfer, destination admission and proxy routing. Same-backend travel teleports
+  locally. The proxy observes READY only after the final native frame commits. SQL occupancy
+  counts both reservations and admitted players. Reservation coordinates are immutable.
+- DB-clock leases and epochs fence stale writers. Expired unclaimed transfers can reconnect
+  with a new epoch; old transfer acceptance is rejected. Recovery may require waiting for
+  the 30-second lease. Redis is an optional at-least-once outbox notification relay, never
+  the source of truth for inventory or ownership. Redis failure retains the SQL outbox.
 
-## Not implemented / not claimed
+## Scope and remaining validation
 
-- Native player.dat, statistics, advancements and all other player state replacement.
-- Transactional NMS click/drag/cursor/crafting/merchant/hopper/item-entity/block/health/tick
-  mutation interception, packet release after commit, and reconciliation after uncertain commits.
-- Shared commit/recovery boundary between world and player state.
-- Velocity plugin, authenticated arrival-ticket transport and actual first-spawn placement.
-- Always-on channel provisioning, idle cleanup, global /spawn and /warp commands.
-- User-facing world rule configuration, region permissions, template metadata/version migration.
-- Whole-network restart reconciliation, cancelled/stranded transfer recovery, player-data
-  import, backup/PITR restore procedure, audit retention, Redis trimming, production metrics.
-- Transparent compatibility with plugins mutating NMS or mutable ItemStacks directly.
+The implementation journals after-state snapshots, not a separate semantic event for every
+mouse click. Ordering is enforced per aggregate/session and atomic frame, not a universal
+wall-clock order across independent backends. Plugin HTTP calls, files, custom databases and
+other external effects are outside a native frame.
 
-The existence of a public interface or a core component is not evidence of native integration.
-No claim of zero data loss or duplication is made. Strict mode remains disabled until these
-paths are implemented and crash-tested end to end.
+Whole-world serialization and synchronous SQL commits on the main thread favor a clear
+experimental boundary over throughput. SQL uses bounded HikariCP pools with connection/socket
+timeouts. Large worlds/player counts, incremental snapshots, event retention, outbox trimming and production observability need
+further work. This mode must not host valuable player inventories yet.
 
-## Build and tests
+Real-player click/drag/crafting/trading/hopper/pickup/death/disconnect and multi-backend transfer
+crash matrices have not all passed end to end. Arbitrary plugin virtual inventories and
+async mutation of Bukkit/NMS objects are not supported. Passenger/vehicle and ender-pearl
+association restoration needs additional work: duplicate entity creation from player NBT
+is suppressed, but restoring those relationships is not yet validated. Multi-node map ID
+allocation/map contents are node-local, not yet a network-global map service.
 
-Requires Java 25 and PostgreSQL 17 for integration tests. Redis 7 is used for relay tests.
-All `LINK_TEST_*` variables must point to a **disposable** database: tests truncate Link tables.
+Global and slime-world SavedData use stable logical node/world namespaces. Earlier path-hashed
+entries are migrated during checkpoint; auxiliary plugin-created storage paths can still be
+path-dependent. Existing player-file import, backups/PITR,
+whole-network rollback policy, idle spawn cleanup and schema-version migration tools remain
+unimplemented. Do not restore a single world independently of player state.
+
+## Build and automated checks
+
+Java 25 is required. Integration tests use PostgreSQL 17 and Redis 7. `LINK_TEST_*` must point
+to a disposable database: tests truncate Link tables.
 
 ```powershell
 $env:LINK_TEST_JDBC_URL='jdbc:postgresql://127.0.0.1:55432/link_test'
 $env:LINK_TEST_DB_USER='link_test'
 $env:LINK_TEST_DB_PASSWORD='link_test_local'
 $env:LINK_TEST_REDIS_URI='redis://127.0.0.1:56379'
-.\gradlew.bat :link-core:test :link-api:jar
+.\gradlew.bat :link-core:test
 .\gradlew.bat applyAllPatches
-.\gradlew.bat :aspaper-server:compileJava
+.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite
+.\gradlew.bat :aspaper-server:createPaperclipJar
 ```
 
-Do not combine `applyPaperSingleFilePatches` and `applyAllServerPatches` in one Gradle invocation:
-the upstream build currently has an implicit dependency validation issue for that combination.
-On Windows, long paths must be enabled for Git in generated resource repositories as well.
+Do not combine `applyPaperSingleFilePatches` and `applyAllServerPatches` in one invocation:
+an upstream implicit-dependency validation issue affects that combination. Windows Git long
+paths must be enabled in generated resource repositories too.
 
-The PostgreSQL tests exercise duplicate operations, stale ownership, simultaneous writers,
-atomic rollback on an outbox failure, replay, transfer fencing, concurrent capacity reservation,
-cross-node admission transfer, immutable templates and duplicate Redis notification delivery.
-They do not constitute a Minecraft runtime or chaos test.
+Checks exercise multi-aggregate rollback, idempotent commits, uncertain commit retry, stale
+owners, admission rollback, single-use arrival tickets, transfer expiry/recovery, concurrent
+capacity allocation and route dispatch, immutable warp coordinates, segmented snapshot
+integrity, Redis redelivery, packet withholding, abort buffer release and adjacent-frame order.
+These tests are not a substitute for real-player and chaos validation.
 
-## Tooling mode only
+`link-integration` is a separate disposable-server probe plugin, never bundled into Link.
+It requires a `test-*` node ID. Console `linkprobe prepare` stores a chest inventory, equipped
+armor stand, world PDC and scoreboard; `linkprobe verify` checks recovery after restart.
+`:link-integration:seedTemplate` creates an empty SRF template only in a database named
+`link_runtime_test`. Accept the Minecraft EULA explicitly before running a test server.
 
-Set `LINK_JDBC_URL`, `LINK_DB_USER`, `LINK_DB_PASSWORD`, `LINK_NODE_ID` in the environment.
-No secrets belong in the repository, JVM command line or logs. Ensure the JDBC role can create
-the initial schema; production privilege separation and migration management remain pending.
+Runtime checks on 2026-10-30 used two Minecraft 26.3 JVMs, PostgreSQL 17 and Redis 7:
 
-Publish an existing valid `.slime` template offline:
+- Forced JVM termination and restart restored a chest with seven diamonds, an equipped
+  armor stand, world PDC and the global scoreboard.
+- A native `ChestMenu` pickup moved seven diamonds onto a synthetic player's cursor.
+  After forced termination, recovery returned exactly seven to the player, left the chest
+  empty, and restored health, experience level and ender-chest contents.
+- A synthetic native player transferred between two live backends, retained those values
+  and arrived at the reserved coordinates. SQL recorded accepted ownership at a new epoch.
+- Stopping PostgreSQL during live frames stopped both backend JVMs. Neither continued
+  gameplay with uncommitted memory state.
+- A TCP protocol client connected through Velocity 4.3.1, entered backend A, changed to
+  backend B through configuration/play transitions, and arrived at `(8,66,8)` with yaw 90.
+  Seven diamonds, three ender-chest emeralds, level 9 and health 13 were verified on B.
+  Same-backend travel also passed. SQL recorded `COMPLETE` and the destination's active epoch.
+  Both test worlds used normal difficulty to prevent peaceful-mode healing changing health.
+- With that TCP client connected, backend B's JVM was forcibly terminated. After lease
+  expiry, reconnecting through Velocity admitted the player on A at its spawn, restored
+  the same inventory/ender chest/level/health, and acquired a newer active ownership epoch.
+
+The automated suite passed 29 core tests (23 against real PostgreSQL/Redis) and five Netty
+gate tests, with no skips. All eight Minecraft feature patches reapplied successfully.
+
+The separate `link-integration/wire-client.cjs` derives packet IDs from the patched 26.3
+sources and exercises a real TCP connection through Velocity. It requires a disposable
+loopback offline-auth proxy on port 25594 and a whitelisted `LinkWire` offline UUID.
+This harness does not test Mojang authentication, rendering or all inventory interactions.
+The probe commands `platform`, `wire-prepare`, `wire-transfer` and `wire-verify` are console
+only; never install this probe on a production backend.
+
+## Backend and proxy configuration
+
+Set `LINK_JDBC_URL`, `LINK_DB_USER`, `LINK_DB_PASSWORD`, `LINK_NODE_ID` for each backend.
+Optionally set `LINK_REDIS_URI`. Keep credentials out of source control and command-line flags.
+Every node ID must match its configured Velocity backend name and be unique while running.
+The proxy uses the same SQL environment variables and the `link-velocity` shaded jar.
+Configure Velocity modern forwarding and the matching backend secret; backend server ports
+must only be reachable by trusted proxies. SQL credentials are trusted engine credentials.
+
+Publish a valid template before native startup:
 
 ```powershell
 .\gradlew.bat :link-core:publishTemplate -PtemplateName=lobby -PtemplateVersion=1 -PtemplateFile=C:/maps/lobby.slime
 ```
 
-Then start the built server with `-Dlink.mode=tools -Dlink.spawn.template=lobby
--Dlink.spawn.version=1`. The template must exist and decode successfully. Boot failures never
-fall back to a vanilla spawn. A node ID must be unique; a live DB lease rejects duplicate nodes.
-Tooling mode uses upstream player files and is **not** the requested durable gameplay mode.
-Use explicit API saves while editing; current world checkpoints are not per-tick persistence.
-
-Tooling commands require `link.admin` (operators by default):
+Backend JVM options:
 
 ```text
-/link templates
-/link worlds
-/link editor <world>
-/link publish <editor> <template> <version>
-/link create <world> <template> <version> <persistent|temporary>
-/link load <world>
-/link save <world>
-/link unload <world>
-/link delete <unloaded-world>
+-Dlink.mode=journal
+-Dlink.spawn.template=lobby
+-Dlink.spawn.version=1
+-Dlink.spawn.capacity=50
+-Dlink.node.capacity=150
+-Dlink.spawn.max-worlds=3
 ```
 
-Deletion writes a tombstone and retains prior checkpoint events. It is not a rollback of
-player-owned items. Do not restore a world checkpoint independently of player state in a
-production economy. `/spawn` and `/warp` gameplay commands are not provided yet.
+There is no vanilla fallback when template/database startup fails. Capacity exhaustion rejects
+admission until a spare world/backend is ready; there is no durable waiting queue yet.
 
-`-Dlink.mode=strict` deliberately throws before worlds load. Do not remove this guard to
-pretend native transactions have been implemented.
+`link.admin` (OP by default) grants `/link templates|worlds|editor|publish|create|load|save|unload|delete`.
+`/link create <name> <template> <version> <persistent|temporary>` clones a template.
+`/link publish <editor> <template> <version>` publishes an immutable version.
+The proxy `/warp <name>` requires `link.warp`; warp destinations are configured through the API.
 
 ## Plugin API
 
-Compile against `io.linkmc:link-api:0.1.0-SNAPSHOT` (publish locally with
-`:link-api:publishToMavenLocal`), or against the Link server API which exports it. Obtain
-`io.linkmc.api.Link.api()` after server initialization. All API calls return CompletionStage;
-never block the tick thread with `join()`/`get()`. Completion callbacks are not tick-thread
-callbacks; dispatch Bukkit mutations back through the server scheduler.
+Compile against `io.linkmc:link-api:0.1.0-SNAPSHOT`, or the Link API which exports it. Do not
+shade another copy. Obtain `io.linkmc.api.Link.api()` after server initialization. Never join
+an asynchronous API future on the Minecraft thread.
 
 ```java
 var link = io.linkmc.api.Link.api();
 link.worlds().createEditor("lobby-editor");
-// After the editor has been built, publish an immutable version:
+// Await dependent operations before publishing/cloning.
 link.worlds().publish("lobby-editor", "lobby", 2);
-link.worlds().create("arena-1", "lobby", 2, false);
 link.network().setWarp("shop", new io.linkmc.api.LinkApi.Destination(
     "node-a", "link-spawn", 10, 65, 10, 0, 0));
+link.network().requestTravel(playerId, operationId, null); // null selects a spawn
+link.network().travelStatus(operationId); // asynchronous status
+link.engine().transact(() -> {
+    // Bukkit inventory/block/entity mutations on the native main thread.
+    // Completion means the containing frame committed; failure stops the backend.
+});
 ```
 
-Examples are independent operations; await a dependent operation's completion before starting
-the next. Raw `data()` is a trusted low-level service, not a Bukkit inventory API or plugin
-security sandbox. Plugin authors must namespace their records and supply session guards for
-player records. Only a future native adapter may interpret native state payloads.
+Worlds exposes editor/publish/create/load/save/unload/delete/loaded/templates. Network exposes
+channels, registerChannel, setChannelReady, reserve (optional exact destination), cancel,
+warp/setWarp and travel request/status. Register channels only after their world is loaded and
+mark them unavailable before unloading. Engine exposes journalEnabled and transact. Data
+exposes read/commit/history for plugin-owned namespaces; writes to `player:` and `native:` are
+rejected through the raw plugin facade. Sessions exposes low-level fenced ownership operations;
+ordinary gameplay plugins should use travel rather than manipulating live engine leases.
 
-## Durability boundary
-
-SQL success is the commit boundary. Configure PostgreSQL durable storage, WAL, backups and
-synchronous replication according to the intended failure model; a local commit alone is not
-a guarantee against losing an entire DB host. Never retry an uncertain operation with a new
-UUID. Retain the original payload and UUID, then resubmit or query the original event.
-
-Session and revision checks provide safety at the database boundary. They do not automatically
-freeze old Minecraft simulation or client packets. That requires the unimplemented NMS hooks.
-DB/Redis failures must not fall back to player files or a second independent writer.
+PostgreSQL durable WAL, storage and replication determine the actual failure model. A local
+SQL commit cannot guarantee survival of total database-host loss. Redis notifications may be
+duplicated or reordered; consumers compare SQL revisions. Strict mode stays disabled until
+runtime, recovery, performance and compatibility requirements are demonstrated.

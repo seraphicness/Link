@@ -90,3 +90,23 @@ tasks.register<DefaultTask>("createMojmapPaperclipJar") {
     description = "Fallback to the old mojmap naming for our CI... Yes this was the easiest fix I could come up with."
     dependsOn(":aspaper-server:createPaperclipJar")
 }
+
+tasks.register<Copy>("linkDist") {
+    description = "Assemble experimental Link server, Velocity module and plugin API."
+    dependsOn(":aspaper-server:createPaperclipJar", ":link-velocity:shadowJar", ":link-api:jar")
+    into(layout.buildDirectory.dir("dist"))
+    from(project(":aspaper-server").layout.buildDirectory.dir("libs")) {
+        include("aspaper-paperclip-*.jar")
+        rename { "Link-26.3-dev.jar" }
+    }
+    from(project(":link-velocity").layout.buildDirectory.dir("libs")) {
+        include("link-velocity-*.jar")
+        exclude("*-plain.jar")
+        rename { "Link-Velocity-dev.jar" }
+    }
+    from(project(":link-api").layout.buildDirectory.dir("libs")) {
+        include("link-api-*.jar")
+        exclude("*-sources.jar", "*-javadoc.jar")
+        rename { "Link-API-dev.jar" }
+    }
+}

@@ -1,12 +1,12 @@
 # Link — Minecraft 26.3
 
 Link is a patch-based fork of AdvancedSlimePaper `dev/26.3`.
-The Link engine is under development: the current code provides transactional storage,
-session fencing, template tooling and plugin API foundations. **Full native player/world
-transactions and Velocity routing are not implemented; this is not a production release.**
+The Link engine is under development: native frame journaling, database-backed player/world
+state, slime templates, fenced transfers and a Velocity routing module are implemented in
+an experimental journal mode. **This is not a production release or a zero-loss guarantee.**
 
 See [implementation status, build instructions and plugin API](docs/link-implementation.md).
-Strict gameplay mode refuses startup until the remaining NMS integration is implemented.
+Strict gameplay mode refuses startup until end-to-end failure and load validation is complete.
 
 ## Upstream Advanced Slime Paper
 

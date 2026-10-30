@@ -1,0 +1,331 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Link <link@localhost>
+Date: Fri, 30 Oct 2026 18:00:00 +0900
+Subject: [PATCH] Link native frame journal and database arrivals
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+index bbba176..529e3cf 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -326,6 +326,10 @@ public final class ChunkTaskScheduler {
+ 
+     public boolean executeMainThreadTask() {
+         TickThread.ensureTickThread("Cannot execute main thread task off-main");
++        if (io.linkmc.server.NativeJournal.enabled()) {
++            if (this.mainThreadExecutor.getTotalTasksExecuted() >= this.mainThreadExecutor.getTotalTasksScheduled()) return false;
++            return io.linkmc.server.NativeJournal.runTask(this.mainThreadExecutor::executeTask);
++        }
+         return this.mainThreadExecutor.executeTask();
+     }
+ 
+@@ -337,7 +341,7 @@ public final class ChunkTaskScheduler {
+ 
+         final long left = scheduled - executed;
+         // may execute more tasks than expected due to recursion
+-        for (long i = 0; i < left && this.mainThreadExecutor.executeTask(); ++i);
++        for (long i = 0; i < left && this.executeMainThreadTask(); ++i);
+     }
+ 
+     public void raisePriority(final int x, final int z, final Priority priority) {
+diff --git a/net/minecraft/network/Connection.java b/net/minecraft/network/Connection.java
+index 936200d..5442099 100644
+--- a/net/minecraft/network/Connection.java
++++ b/net/minecraft/network/Connection.java
+@@ -749,6 +749,7 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+             .addLast(new FlowControlHandler())
+             .addLast(inboundHandlerName(configureInbound), configureInbound ? new PacketDecoder<>(INITIAL_PROTOCOL) : new UnconfiguredPipelineHandler.Inbound())
+             .addLast(HandlerNames.PREPENDER, createFrameEncoder(local))
++            .addLast("link_packet_gate", new io.linkmc.server.LinkPacketGate())
+             .addLast(
+                 outboundHandlerName(configureOutbound), configureOutbound ? new PacketEncoder<>(INITIAL_PROTOCOL) : new UnconfiguredPipelineHandler.Outbound()
+             );
+diff --git a/net/minecraft/network/PacketProcessor.java b/net/minecraft/network/PacketProcessor.java
+index 408cb99..341f781 100644
+--- a/net/minecraft/network/PacketProcessor.java
++++ b/net/minecraft/network/PacketProcessor.java
+@@ -90,12 +90,18 @@ public class PacketProcessor implements AutoCloseable {
+ 
+     private record ListenerAndPacket<T extends PacketListener>(T listener, Packet<T> packet) {
+         public void handle() {
++            if (this.listener instanceof net.minecraft.server.network.ServerGamePacketListenerImpl game && io.linkmc.server.NativeJournal.moving(game.player.getUUID())) return;
++            io.linkmc.server.NativeJournal.run(this::linkHandle);
++        }
++
++        private void linkHandle() {
+             packetProcessing.push(this.listener); // Paper - detailed watchdog information
+             try { // Paper - detailed watchdog information
+             if (this.listener.shouldHandleMessage(this.packet)) {
+                 try {
+                     this.packet.handle(this.listener);
+                 } catch (Exception e) {
++                    if (io.linkmc.server.NativeJournal.enabled()) throw new IllegalStateException("Native packet execution failed", e);
+                     if (e instanceof ReportedException re && re.getCause() instanceof OutOfMemoryError) {
+                         throw PacketUtils.makeReportedException(e, this.packet, this.listener);
+                     }
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 572f953..40ff611 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1516,7 +1516,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     @Override
+     protected void doRunTask(final TickTask task) {
+         Profiler.get().incrementCounter("runTask");
+-        super.doRunTask(task);
++        io.linkmc.server.NativeJournal.run(() -> super.doRunTask(task));
+     }
+ 
+     private Optional<ServerStatus.Favicon> loadStatusIcon() {
+@@ -1655,6 +1655,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     }
+ 
+     protected void processPacketsAndTick(final boolean sprinting) {
++        io.linkmc.server.NativeJournal.run(() -> this.linkProcessPacketsAndTick(sprinting));
++    }
++
++    private void linkProcessPacketsAndTick(final boolean sprinting) {
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("tick");
+         this.tickFrame.start();
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index e707016..b9e28bc 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -111,7 +111,10 @@ public class PlayerAdvancements {
+     }
+ 
+     private void load(final ServerAdvancementManager manager) {
+-        if (Files.isRegularFile(this.playerSavePath)) {
++        if (io.linkmc.server.NativeJournal.enabled()) {
++            var json = io.linkmc.server.NativeJournal.advancements(this.player.getUUID());
++            if (json != null) this.applyFrom(manager, this.codec.parse(JsonOps.INSTANCE, json).getOrThrow(JsonParseException::new));
++        } else if (Files.isRegularFile(this.playerSavePath)) {
+             try (Reader reader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
+                 JsonElement json = StrictJsonParser.parse(reader);
+                 PlayerAdvancements.Data data = this.codec.parse(JsonOps.INSTANCE, json).getOrThrow(JsonParseException::new);
+@@ -127,7 +130,10 @@ public class PlayerAdvancements {
+         this.registerListeners(manager);
+     }
+ 
++    public JsonElement linkSnapshot() { return this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow(); }
++
+     public void save() {
++        if (io.linkmc.server.NativeJournal.enabled()) return;
+         if (org.spigotmc.SpigotConfig.disableAdvancementSaving) return; // Spigot
+         JsonElement json = this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow();
+ 
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index c4cfb53..50581f4 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -840,7 +840,7 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+         @Override
+         protected void doRunTask(final Runnable task) {
+             Profiler.get().incrementCounter("runTask");
+-            super.doRunTask(task);
++            io.linkmc.server.NativeJournal.run(() -> super.doRunTask(task));
+         }
+ 
+         @Override
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 1137be3..10ad9eb 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -724,6 +724,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+     @Override
+     public void tick() {
++        if (io.linkmc.server.NativeJournal.moving(this.getUUID())) return;
+         // CraftBukkit start
+         if (this.joining) {
+             this.joining = false;
+@@ -808,6 +809,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+     }
+ 
+     public void doTick() {
++        if (io.linkmc.server.NativeJournal.moving(this.getUUID())) return;
+         try {
+             if (this.valid && (!this.isSpectator() || !this.touchingUnloadedChunk())) { // Paper - don't tick dead players that are not in the world currently (pending respawn)
+                 super.tick();
+diff --git a/net/minecraft/server/network/config/PrepareSpawnTask.java b/net/minecraft/server/network/config/PrepareSpawnTask.java
+index f6601bc..e1ce724 100644
+--- a/net/minecraft/server/network/config/PrepareSpawnTask.java
++++ b/net/minecraft/server/network/config/PrepareSpawnTask.java
+@@ -52,6 +52,7 @@ public class PrepareSpawnTask implements ConfigurationTask {
+ 
+     @Override
+     public void start(final Consumer<Packet<?>> connection) {
++        io.linkmc.server.NativeJournal.prepare(this.nameAndId.id(), this.listener.connection);
+         try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(LOGGER)) {
+             Optional<ValueInput> loadedData = this.server
+                 .getPlayerList()
+@@ -110,6 +111,14 @@ public class PrepareSpawnTask implements ConfigurationTask {
+                 .orElseGet(() -> PlayerSpawnFinder.findSpawn(finalSpawnLevel, respawnData.pos()));
+             // Paper end - move logic in Entity to here, to use bukkit supplied world UUID & reset to main world spawn if no valid world is found
+             Vec2 spawnAngle = loadedPosition.rotation().orElse(new Vec2(respawnData.yaw(), respawnData.pitch()));
++            if (io.linkmc.server.NativeJournal.enabled()) {
++                var destination = io.linkmc.server.NativeJournal.destination(this.nameAndId.id());
++                var target = org.bukkit.Bukkit.getWorld(destination.world());
++                if (target == null) throw new IllegalStateException("Reserved Link world is not ready");
++                spawnLevel = ((org.bukkit.craftbukkit.CraftWorld) target).getHandle();
++                spawnPosition = CompletableFuture.completedFuture(new Vec3(destination.x(), destination.y(), destination.z()));
++                spawnAngle = new Vec2(destination.yaw(), destination.pitch());
++            }
+             this.state = new PrepareSpawnTask.Preparing(spawnLevel, spawnPosition, spawnAngle);
+         }
+     }
+@@ -232,6 +241,13 @@ public class PrepareSpawnTask implements ConfigurationTask {
+                     this.spawnAngle = new Vec2(location.getYaw(), location.getPitch());
+                 }
+                 // Paper end - PlayerSpawnLocationEvent
++                if (io.linkmc.server.NativeJournal.enabled()) {
++                    var destination = io.linkmc.server.NativeJournal.destination(PrepareSpawnTask.this.nameAndId.id());
++                    this.spawnLevel = ((org.bukkit.craftbukkit.CraftWorld) java.util.Objects.requireNonNull(org.bukkit.Bukkit.getWorld(destination.world()), "Reserved world unavailable")).getHandle();
++                    spawnPosition = new Vec3(destination.x(), destination.y(), destination.z());
++                    this.spawnPosition = CompletableFuture.completedFuture(spawnPosition);
++                    this.spawnAngle = new Vec2(destination.yaw(), destination.pitch());
++                }
+                 ChunkPos spawnChunk = ChunkPos.containing(BlockPos.containing(spawnPosition));
+                 this.chunkLoadFuture = ((ca.spottedleaf.moonrise.patches.chunk_system.MoonriseChunkLoadCounter)this.chunkLoadCounter).trackLoadWithRadius(this.spawnLevel, spawnChunk, 3, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, ca.spottedleaf.concurrentutil.util.Priority.HIGH, () -> { Preparing.this.spawnLevel.getChunkSource().addTicketWithRadius(TicketType.PLAYER_SPAWN, spawnChunk, 3); }); // Paper - rewrite chunk system
+                 PrepareSpawnTask.this.loadListener.start(LevelLoadListener.Stage.LOAD_PLAYER_CHUNKS, this.chunkLoadCounter.totalChunks());
+@@ -291,7 +307,7 @@ public class PrepareSpawnTask implements ConfigurationTask {
+                         org.bukkit.craftbukkit.entity.CraftPlayer craftPlayer = player.getBukkitEntity();
+                         // Only update first played if it is older than the one we have
+                         long modified = new java.io.File(PrepareSpawnTask.this.server.getPlayerList().playerIo.getPlayerDir(), player.getStringUUID() + ".dat").lastModified();
+-                        if (modified < craftPlayer.getFirstPlayed()) {
++                        if (!io.linkmc.server.NativeJournal.enabled() && modified < craftPlayer.getFirstPlayed()) {
+                             craftPlayer.setFirstPlayed(modified);
+                         }
+                         return tag;
+@@ -310,6 +326,7 @@ public class PrepareSpawnTask implements ConfigurationTask {
+                 }
+                 // Paper end - Entity#getEntitySpawnReason
+                 player.snapTo(this.spawnPosition, this.spawnAngle.x, this.spawnAngle.y);
++                io.linkmc.server.NativeJournal.joined(player);
+                 PrepareSpawnTask.this.server.getPlayerList().placeNewPlayer(connection, player, cookie);
+                 input.ifPresent(tag -> {
+                     player.loadAndSpawnEnderPearls(tag);
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 62f57eb..c33df71 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -406,6 +406,7 @@ public abstract class PlayerList {
+     }
+ 
+     public Optional<CompoundTag> loadPlayerData(final NameAndId nameAndId) {
++        if (io.linkmc.server.NativeJournal.enabled()) return io.linkmc.server.NativeJournal.playerData(nameAndId.id());
+         UUID lastSingleplayerOwnerUUID = this.server.getWorldData().getSinglePlayerUUID();
+         if (this.server.isSingleplayerOwner(nameAndId) && lastSingleplayerOwnerUUID != null) {
+             LOGGER.debug("loading single player");
+@@ -416,6 +417,7 @@ public abstract class PlayerList {
+     }
+ 
+     protected void save(final ServerPlayer player) {
++        if (io.linkmc.server.NativeJournal.enabled()) return; // Whole native frames own player/world durability.
+         if (!player.getBukkitEntity().isPersistent()) return; // CraftBukkit
+         player.lastSave = MinecraftServer.currentTick; // Paper - Incremental chunk and player saving
+         this.playerIo.save(player);
+@@ -529,6 +531,7 @@ public abstract class PlayerList {
+         // This removes the scoreboard (and player reference) for the specific player in the manager
+         this.cserver.getScoreboardManager().removePlayer(player.getBukkitEntity());
+         // CraftBukkit end
++        io.linkmc.server.NativeJournal.left(player);
+         return playerQuitEvent.quitMessage(); // Paper - Adventure
+     }
+ 
+@@ -1177,7 +1180,12 @@ public abstract class PlayerList {
+     }
+     public ServerStatsCounter getPlayerStats(final GameProfile gameProfile) {
+             Path targetFile = this.locateStatsFile(gameProfile);
+-            return new ServerStatsCounter(this.server, targetFile);
++            ServerStatsCounter counter = new ServerStatsCounter(this.server, targetFile);
++            if (io.linkmc.server.NativeJournal.enabled()) {
++                var data = io.linkmc.server.NativeJournal.stats(gameProfile.id());
++                if (data != null) counter.parse(this.server.getFixerUpper(), data);
++            }
++            return counter;
+     }
+     // CraftBukkit end
+ 
+diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
+index f5beb00..bbbf3dd 100644
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -65,7 +65,7 @@ public class ServerStatsCounter extends StatsCounter {
+ 
+     public ServerStatsCounter(final MinecraftServer server, final Path file) {
+         this.file = file;
+-        if (Files.isRegularFile(file)) {
++        if (!io.linkmc.server.NativeJournal.enabled() && Files.isRegularFile(file)) {
+             try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                 JsonElement element = StrictJsonParser.parse(reader);
+                 this.parse(server.getFixerUpper(), element);
+@@ -88,7 +88,10 @@ public class ServerStatsCounter extends StatsCounter {
+         // Paper end - Moved after stat fetching for player state file
+     }
+ 
++    public JsonElement linkSnapshot() { return this.toJson(); }
++
+     public void save() {
++        if (io.linkmc.server.NativeJournal.enabled()) return;
+         if (org.spigotmc.SpigotConfig.disableStatSaving) return; // Spigot
+         try {
+             FileUtil.createDirectoriesSafe(this.file.getParent());
+diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
+index 142a34e..76bde57 100644
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -31,6 +31,7 @@ public class PlayerDataStorage {
+     }
+ 
+     public void save(final Player player) {
++        if (io.linkmc.server.NativeJournal.enabled()) return;
+         if (org.spigotmc.SpigotConfig.disablePlayerDataSaving) return; // Spigot
+         try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(player.problemPath(), LOGGER)) {
+             TagValueOutput output = TagValueOutput.createWithContext(reporter, player.registryAccess());
+@@ -91,6 +92,7 @@ public class PlayerDataStorage {
+     }
+ 
+     public Optional<CompoundTag> load(final NameAndId nameAndId) {
++        if (io.linkmc.server.NativeJournal.enabled()) return io.linkmc.server.NativeJournal.playerData(nameAndId.id());
+         Optional<CompoundTag> optTag = this.load(nameAndId, ".dat");
+         if (optTag.isEmpty()) {
+             this.backup(nameAndId, ".dat");
+diff --git a/net/minecraft/world/level/storage/SavedDataStorage.java b/net/minecraft/world/level/storage/SavedDataStorage.java
+index f359e53..88e2862 100644
+--- a/net/minecraft/world/level/storage/SavedDataStorage.java
++++ b/net/minecraft/world/level/storage/SavedDataStorage.java
+@@ -51,6 +51,7 @@ public class SavedDataStorage implements AutoCloseable {
+         this.fixerUpper = fixerUpper;
+         this.dataFolder = dataFolder;
+         this.registries = registries;
++        io.linkmc.server.NativeJournal.registerStorage(this, dataFolder);
+     }
+ 
+     private Path getDataFile(final Identifier id) {
+@@ -84,6 +85,10 @@ public class SavedDataStorage implements AutoCloseable {
+     }
+ 
+     private <T extends SavedData> @Nullable T readSavedData(final SavedDataType<T> type) {
++        if (io.linkmc.server.NativeJournal.enabled()) {
++            return io.linkmc.server.NativeJournal.savedData(this, this.dataFolder, type.id().toString())
++                .map(tag -> type.codec().parse(this.registries.createSerializationContext(NbtOps.INSTANCE), tag.get("data")).getOrThrow()).orElse(null);
++        }
+         try {
+             Path file = this.getDataFile(type.id());
+             if (Files.exists(file)) {
+@@ -143,7 +148,15 @@ public class SavedDataStorage implements AutoCloseable {
+         return gzip;
+     }
+ 
++    public Map<String, CompoundTag> linkSnapshot() {
++        Map<String, CompoundTag> tags = new HashMap<>();
++        RegistryOps<Tag> ops = this.registries.createSerializationContext(NbtOps.INSTANCE);
++        this.cache.forEach((type, value) -> value.ifPresent(data -> tags.put(type.id().toString(), this.encodeUnchecked(type, data, ops))));
++        return tags;
++    }
++
+     public CompletableFuture<?> scheduleSave() {
++        if (io.linkmc.server.NativeJournal.enabled()) return CompletableFuture.completedFuture(null);
+         if (this.closed) {
+             throw new IllegalStateException("Trying to schedule save when SavedDataStorage is already closed");
+         }

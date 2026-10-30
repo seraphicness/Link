@@ -13,7 +13,8 @@ plugins {
 
 rootProject.name = "Link"
 
-include(":link-api", ":link-core")
+include(":link-api", ":link-core", ":link-velocity")
+include(":link-integration")
 
 include(":api")
 include(":core")

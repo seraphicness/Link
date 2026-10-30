@@ -16,6 +16,14 @@ public final class EventStore {
     public Optional<State> read(String id) throws Exception {
         return db.transaction(c -> read(c, id));
     }
+    public List<State> prefix(String prefix) throws Exception {
+        return db.transaction(c -> {
+            List<State> result=new ArrayList<>();
+            try(var s=sql(c,"SELECT id,version,schema_version,payload FROM link_state WHERE starts_with(id,?) ORDER BY id",prefix);var r=s.executeQuery()){
+                while(r.next())result.add(new State(r.getString(1),r.getLong(2),r.getInt(3),r.getBytes(4)));
+            }return List.copyOf(result);
+        });
+    }
     static Optional<State> read(Connection c, String id) throws SQLException {
         try (var s = sql(c, "SELECT version,schema_version,payload FROM link_state WHERE id=?", id);
              var r = s.executeQuery()) {

@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS link_transfers (
  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS link_one_prepared_transfer ON link_transfers(player) WHERE state='PREPARED';
+ALTER TABLE link_transfers DROP CONSTRAINT IF EXISTS link_transfers_state_check;
+ALTER TABLE link_transfers ADD CONSTRAINT link_transfers_state_check CHECK(state IN ('PREPARED','ACCEPTED','CANCELLED'));
 CREATE TABLE IF NOT EXISTS link_nodes (
  id text PRIMARY KEY, capacity integer NOT NULL CHECK(capacity > 0),
  heartbeat timestamptz NOT NULL DEFAULT clock_timestamp()
@@ -46,6 +48,12 @@ CREATE TABLE IF NOT EXISTS link_reservations (
  state text NOT NULL CHECK(state IN ('RESERVED','ADMITTED')), expires_at timestamptz NOT NULL
 );
 ALTER TABLE link_reservations DROP CONSTRAINT IF EXISTS link_reservations_player_key;
+ALTER TABLE link_reservations ADD COLUMN IF NOT EXISTS x double precision;
+ALTER TABLE link_reservations ADD COLUMN IF NOT EXISTS y double precision;
+ALTER TABLE link_reservations ADD COLUMN IF NOT EXISTS z double precision;
+ALTER TABLE link_reservations ADD COLUMN IF NOT EXISTS yaw real;
+ALTER TABLE link_reservations ADD COLUMN IF NOT EXISTS pitch real;
+UPDATE link_reservations r SET x=c.x,y=c.y,z=c.z,yaw=c.yaw,pitch=c.pitch FROM link_channels c WHERE r.channel=c.id AND r.x IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS link_one_reservation ON link_reservations(player) WHERE state='RESERVED';
 CREATE UNIQUE INDEX IF NOT EXISTS link_one_admission ON link_reservations(player) WHERE state='ADMITTED';
 CREATE TABLE IF NOT EXISTS link_warps (
@@ -58,3 +66,18 @@ CREATE TABLE IF NOT EXISTS link_templates (
  sha256 bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(name,version)
 );
+CREATE TABLE IF NOT EXISTS link_arrivals (
+ id uuid PRIMARY KEY, player uuid NOT NULL, reservation uuid NOT NULL,
+ transfer uuid, node text NOT NULL, state text NOT NULL CHECK(state IN ('ISSUED','CLAIMED','CANCELLED')),
+ epoch bigint, expires_at timestamptz NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS link_one_issued_arrival ON link_arrivals(player) WHERE state='ISSUED';
+CREATE TABLE IF NOT EXISTS link_routes (
+ id uuid PRIMARY KEY, player uuid NOT NULL, reservation uuid NOT NULL,
+ state text NOT NULL CHECK(state IN ('REQUESTED','READY','FAILED')),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS link_one_route_request ON link_routes(player) WHERE state='REQUESTED';
+ALTER TABLE link_routes DROP CONSTRAINT IF EXISTS link_routes_state_check;
+ALTER TABLE link_routes ADD CONSTRAINT link_routes_state_check CHECK(state IN ('REQUESTED','READY','CONNECTING','COMPLETE','FAILED'));

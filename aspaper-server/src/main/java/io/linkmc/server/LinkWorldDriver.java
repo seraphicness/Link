@@ -28,7 +28,8 @@ public final class LinkWorldDriver implements WorldService.Driver {
         if(Bukkit.isPrimaryThread())return task.call();
         if(MinecraftServer.getServer().isStopped())throw new IllegalStateException("Server stopped before world operation could run");
         var future=new CompletableFuture<T>();
-        MinecraftServer.getServer().execute(() -> {if(future.isCancelled())return;try{future.complete(task.call());}catch(Throwable e){future.completeExceptionally(e);}});
+        if(!NativeJournal.watch(future))return future.get();
+        MinecraftServer.getServer().execute(() -> {if(future.isCancelled())return;try{NativeJournal.complete(future,task.call());}catch(Throwable e){future.completeExceptionally(e);if(NativeJournal.enabled())throw new IllegalStateException("World operation failed",e);}});
         // No timeout: otherwise a timed-out operation might still create a world later.
         try{return future.get();}catch(InterruptedException e){future.cancel(false);Thread.currentThread().interrupt();throw e;}
     }
@@ -50,13 +51,19 @@ public final class LinkWorldDriver implements WorldService.Driver {
         SlimeWorld world=asp.getSerializer().deserializeWorld(name,template,null,properties(),true);
         managed.put(name,false);return world;
     }
+    public void restoreNative(String name,byte[] bytes)throws Exception{
+        var world=asp.getSerializer().deserializeWorld(name,bytes,null,properties(),true);
+        asp.loadWorld(world,true);managed.put(name,NativeJournal.persistentWorld(name));
+    }
     public WorldInfo createEditor(String name)throws Exception {
         key(name);
         if(store.read(key(name)).isPresent())throw new ConflictException("Stored world already exists");
         return main(() -> {
+            if(NativeJournal.knownWorld(name))throw new ConflictException("World identity already exists");
             SlimeWorld world=asp.createEmptyWorld(name,true,properties(),null);
             SlimeWorldInstance loaded=asp.loadWorld(world,true);
             managed.put(name,true);versions.put(name,0L);
+            NativeJournal.createdWorld(name,true);
             loaded.getBukkitWorld().setAutoSave(false);
             loaded.getBukkitWorld().getWorldBorder().setSize(256);
             loaded.getBukkitWorld().getBlockAt(0,64,0).setType(org.bukkit.Material.BEDROCK);
@@ -65,7 +72,17 @@ public final class LinkWorldDriver implements WorldService.Driver {
         });
     }
     public byte[] snapshot(String name)throws Exception {
-        SlimeWorld copy=main(() -> live(name).getSerializableCopy());
+        SlimeWorld copy=main(() -> {
+            var result=live(name).getSerializableCopy();
+            if(NativeJournal.enabled()){
+                var saved=new net.minecraft.nbt.CompoundTag();
+                ((org.bukkit.craftbukkit.CraftWorld)Bukkit.getWorld(name)).getHandle().getDataStorage().linkSnapshot().forEach((id,tag)->{
+                    if(!id.equals("paper:metadata"))saved.put(id,tag);
+                });
+                result.getExtraData().put("LinkSavedData",com.infernalsuite.asp.Converter.convertTag(saved));
+            }
+            return result;
+        });
         return asp.getSerializer().serializeWorld(copy);
     }
     public WorldInfo instantiate(String name,byte[] srf,boolean persistent)throws Exception {
@@ -73,7 +90,9 @@ public final class LinkWorldDriver implements WorldService.Driver {
         if(store.read(key(name)).isPresent())throw new ConflictException("Stored world already exists");
         SlimeWorld world=asp.getSerializer().deserializeWorld(name,srf,null,properties(),true);
         WorldInfo result=main(() -> {
+            if(NativeJournal.knownWorld(name))throw new ConflictException("World identity already exists");
             var instance=asp.loadWorld(world,true);managed.put(name,persistent);versions.put(name,0L);
+            NativeJournal.createdWorld(name,persistent);
             instance.getBukkitWorld().setAutoSave(false);
             return new WorldInfo(name,persistent,instance.getBukkitWorld().getPlayerCount());
         });
@@ -81,6 +100,12 @@ public final class LinkWorldDriver implements WorldService.Driver {
         return result;
     }
     public WorldInfo load(String name)throws Exception {
+        if(NativeJournal.enabled())return main(()->{
+            if(managed.containsKey(name))throw new ConflictException("World already loaded");
+            var world=asp.getSerializer().deserializeWorld(name,NativeJournal.storedWorld(name),null,properties(),true);
+            asp.loadWorld(world,true);managed.put(name,NativeJournal.persistentWorld(name));
+            Bukkit.getWorld(name).setAutoSave(false);return new WorldInfo(name,NativeJournal.persistentWorld(name),0);
+        });
         State state=store.read(key(name)).orElseThrow(() -> new ConflictException("Unknown stored world"));
         if(state.payload().length==0)throw new ConflictException("World was deleted");
         SlimeWorld world=asp.getSerializer().deserializeWorld(name,state.payload(),null,properties(),true);
@@ -90,6 +115,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
         });
     }
     public void save(String name)throws Exception {
+        if(NativeJournal.enabled()){main(()->{NativeJournal.run(()->{});return null;});return;}
         if(!Boolean.TRUE.equals(managed.get(name)))throw new ConflictException("Temporary worlds are never saved");
         byte[] bytes=snapshot(name);
         long version=versions.get(name);
@@ -111,6 +137,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
     }
     public void delete(String name)throws Exception {
         if(managed.containsKey(name))throw new ConflictException("Unload the world before deleting it");
+        if(NativeJournal.enabled()){main(()->{NativeJournal.deleteWorld(name);return null;});return;}
         State state=store.read(key(name)).orElseThrow(() -> new ConflictException("Unknown world"));
         store.commit(new Transaction(UUID.randomUUID(),List.of(guard),List.of(new Change(key(name),state.version(),1,"world:deleted",new byte[0]))));
     }

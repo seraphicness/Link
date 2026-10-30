@@ -20,3 +20,4 @@ aspaper-server/.gradle/
 paper-checkstyle/
 *-setup.log
 link-test.log
+link-integration/logs/

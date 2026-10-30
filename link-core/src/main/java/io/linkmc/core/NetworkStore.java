@@ -24,24 +24,36 @@ public final class NetworkStore {
         if(capacity<1) throw new IllegalArgumentException("Invalid capacity");
         db.transaction(c -> {
             lock(c,"allocation");
-            update(c,"INSERT INTO link_channels(id,node,world,capacity,ready,x,y,z,yaw,pitch) VALUES (?,?,?,?,true,?,?,?,?,?)",
+            int changed=update(c,"INSERT INTO link_channels(id,node,world,capacity,ready,x,y,z,yaw,pitch) VALUES (?,?,?,?,true,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET capacity=excluded.capacity,ready=true,x=excluded.x,y=excluded.y,z=excluded.z,yaw=excluded.yaw,pitch=excluded.pitch WHERE link_channels.node=excluded.node AND link_channels.world=excluded.world",
                     id,spawn.node(),spawn.world(),capacity,spawn.x(),spawn.y(),spawn.z(),spawn.yaw(),spawn.pitch());
+            if(changed!=1)throw new ConflictException("Channel ID belongs to another world");
             return null;
         });
     }
     public void ready(String id, boolean ready) throws Exception {
         db.transaction(c -> { lock(c,"allocation"); update(c,"UPDATE link_channels SET ready=? WHERE id=?",ready,id); return null; });
     }
+    public void reconcileNode(Session nodeLease)throws Exception{
+        db.transaction(c->{
+            SessionStore.requireActive(c,nodeLease);lock(c,"allocation");
+            update(c,"UPDATE link_channels SET ready=false WHERE node=?",nodeLease.node());
+            update(c,"DELETE FROM link_reservations r USING link_channels c WHERE r.channel=c.id AND c.node=? AND (r.expires_at<=clock_timestamp() OR NOT EXISTS(SELECT 1 FROM link_sessions s WHERE s.player=r.player AND s.state IN ('ACTIVE','MOVING') AND s.expires_at>clock_timestamp()))",nodeLease.node());
+            return null;
+        });
+    }
     public List<Channel> channels() throws Exception {
         return db.transaction(c -> {
             List<Channel> result=new ArrayList<>();
-            try(var s=sql(c,"SELECT c.*,count(r.id) FILTER(WHERE r.state='ADMITTED') AS occupied,count(r.id) FILTER(WHERE r.state='RESERVED') AS reserved FROM link_channels c JOIN link_nodes n ON n.id=c.node LEFT JOIN link_reservations r ON r.channel=c.id AND r.expires_at>clock_timestamp() WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' GROUP BY c.id ORDER BY c.id"); var r=s.executeQuery()) {
+            try(var s=sql(c,"SELECT c.*,count(r.id) FILTER(WHERE r.state='ADMITTED') AS occupied,count(DISTINCT r.player)-count(DISTINCT r.player) FILTER(WHERE r.state='ADMITTED') AS reserved FROM link_channels c JOIN link_nodes n ON n.id=c.node LEFT JOIN link_reservations r ON r.channel=c.id AND r.expires_at>clock_timestamp() WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' GROUP BY c.id ORDER BY c.id"); var r=s.executeQuery()) {
                 while(r.next()) result.add(new Channel(r.getString("id"),r.getString("node"),r.getString("world"),r.getInt("capacity"),r.getInt("occupied"),r.getInt("reserved")));
             }
             return List.copyOf(result);
         });
     }
     public Reservation reserve(UUID player, UUID request) throws Exception {
+        return reserve(player,request,null);
+    }
+    public Reservation reserve(UUID player, UUID request, Destination target) throws Exception {
         return db.transaction(c -> {
             lock(c,"allocation");
             // Idempotent retries return the same destination; no extra slot is consumed.
@@ -50,6 +62,7 @@ public final class NetworkStore {
                     if(!player.equals(r.getObject("player",UUID.class))) throw new ConflictException("Reservation ID reused");
                     if(!r.getString("state").equals("RESERVED")) throw new ConflictException("Already admitted");
                     if(!r.getBoolean("valid")) throw new ConflictException("Reservation expired");
+                    if(target!=null&&!reservation(r).destination().equals(target))throw new ConflictException("Reservation destination changed");
                     return reservation(r);
                 }
             }
@@ -59,19 +72,22 @@ public final class NetworkStore {
             try(var s=sql(c,"SELECT 1 FROM link_reservations WHERE player=? AND state='RESERVED'",player); var r=s.executeQuery()) {
                 if(r.next()) throw new ConflictException("Player already has an admission");
             }
-            String query="SELECT c.* FROM link_channels c JOIN link_nodes n ON n.id=c.node WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' AND (SELECT count(*) FROM link_reservations r WHERE r.channel=c.id)<c.capacity AND (SELECT count(*) FROM link_reservations r JOIN link_channels nc ON nc.id=r.channel WHERE nc.node=c.node)<n.capacity ORDER BY (SELECT count(*) FROM link_reservations r WHERE r.channel=c.id) DESC,c.id LIMIT 1";
-            try(var s=sql(c,query); var r=s.executeQuery()) {
+            String query="SELECT c.* FROM link_channels c JOIN link_nodes n ON n.id=c.node WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' AND (SELECT count(DISTINCT r.player) FROM link_reservations r WHERE r.channel=c.id AND r.player<>?)<c.capacity AND (SELECT count(DISTINCT r.player) FROM link_reservations r JOIN link_channels nc ON nc.id=r.channel WHERE nc.node=c.node AND r.player<>?)<n.capacity ORDER BY (SELECT count(*) FROM link_reservations r WHERE r.channel=c.id) DESC,c.id LIMIT 1";
+            if(target!=null)query=query.replace("WHERE c.ready AND", "WHERE c.node=? AND c.world=? AND c.ready AND");
+            try(var s=target==null?sql(c,query,player,player):sql(c,query,target.node(),target.world(),player,player); var r=s.executeQuery()) {
                 if(!r.next()) throw new ConflictException("NO_CAPACITY: provision a ready spawn before retrying");
                 String channel=r.getString("id");
-                Destination destination=new Destination(r.getString("node"),r.getString("world"),r.getDouble("x"),r.getDouble("y"),r.getDouble("z"),r.getFloat("yaw"),r.getFloat("pitch"));
-                try(var insert=sql(c,"INSERT INTO link_reservations(id,player,channel,state,expires_at) VALUES (?,?,?,'RESERVED',clock_timestamp()+interval '30 seconds') RETURNING expires_at",request,player,channel); var expiry=insert.executeQuery()) {
+                Destination destination=target!=null?target:new Destination(r.getString("node"),r.getString("world"),r.getDouble("x"),r.getDouble("y"),r.getDouble("z"),r.getFloat("yaw"),r.getFloat("pitch"));
+                try(var insert=sql(c,"INSERT INTO link_reservations(id,player,channel,state,expires_at,x,y,z,yaw,pitch) VALUES (?,?,?,'RESERVED',clock_timestamp()+interval '30 seconds',?,?,?,?,?) RETURNING expires_at",request,player,channel,destination.x(),destination.y(),destination.z(),destination.yaw(),destination.pitch()); var expiry=insert.executeQuery()) {
                     expiry.next(); return new Reservation(request,player,channel,destination,expiry.getTimestamp(1).toInstant());
                 }
             }
         });
     }
     public Destination admit(UUID reservation, Session owner) throws Exception {
-        return db.transaction(c -> {
+        return db.transaction(c -> admit(c,reservation,owner));
+    }
+    Destination admit(java.sql.Connection c, UUID reservation, Session owner) throws Exception {
             // Match session -> allocation lock order everywhere.
             SessionStore.requireActive(c,owner); lock(c,"allocation");
             try(var s=sql(c,"SELECT r.*,c.node,c.world,c.x,c.y,c.z,c.yaw,c.pitch,c.ready,n.heartbeat>clock_timestamp()-interval '15 seconds' AS alive,r.expires_at>clock_timestamp() AS valid FROM link_reservations r JOIN link_channels c ON c.id=r.channel JOIN link_nodes n ON n.id=c.node WHERE r.id=? AND r.player=? FOR UPDATE OF r",reservation,owner.player()); var r=s.executeQuery()) {
@@ -83,7 +99,7 @@ public final class NetworkStore {
                 update(c,"UPDATE link_reservations SET state='ADMITTED',expires_at='infinity' WHERE id=?",reservation);
                 return reservation(r).destination();
             }
-        });
+
     }
     public void cancel(UUID id, UUID player) throws Exception {
         db.transaction(c -> { lock(c,"allocation"); update(c,"DELETE FROM link_reservations WHERE id=? AND player=? AND state='RESERVED'",id,player); return null; });

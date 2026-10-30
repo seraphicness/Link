@@ -6,11 +6,27 @@ import java.sql.*;
 import java.util.Objects;
 
 /** One connection per transaction; connection factory may be backed by a pool. */
-public final class Database {
+public final class Database implements AutoCloseable {
     @FunctionalInterface public interface Connections { Connection open() throws SQLException; }
     @FunctionalInterface public interface Work<T> { T run(Connection connection) throws Exception; }
     private final Connections connections;
+    private Runnable close=()->{};
     public Database(Connections connections) { this.connections = Objects.requireNonNull(connections); }
+    public static Database pooled(String url,String user,String password){
+        var config=new com.zaxxer.hikari.HikariConfig();
+        // Velocity uses an isolated plugin class loader; JDBC service discovery
+        // on an event thread may otherwise see only the proxy's parent loader.
+        config.setDriverClassName("org.postgresql.Driver");
+        config.setJdbcUrl(url);config.setUsername(user);config.setPassword(password);
+        config.setPoolName("Link-SQL");config.setMaximumPoolSize(8);config.setMinimumIdle(2);
+        config.setConnectionTimeout(5000);config.setValidationTimeout(2000);
+        config.addDataSourceProperty("tcpKeepAlive","true");
+        config.addDataSourceProperty("connectTimeout","5");
+        config.addDataSourceProperty("socketTimeout","15");
+        var pool=new com.zaxxer.hikari.HikariDataSource(config);
+        var db=new Database(pool::getConnection);db.close=pool::close;return db;
+    }
+    @Override public void close(){close.run();}
     public <T> T transaction(Work<T> work) throws Exception {
         try (Connection c = connections.open()) {
             c.setAutoCommit(false);

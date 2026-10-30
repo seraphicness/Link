@@ -20,4 +20,5 @@ public final class RuntimeProvider implements LinkApi {
     @Override public Sessions sessions() {return runtime().sessions();}
     @Override public Network network() {return runtime().network();}
     @Override public Worlds worlds() {return runtime().worlds();}
+    @Override public Engine engine() {return runtime().engine();}
 }
