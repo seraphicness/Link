@@ -23,6 +23,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
     private final WorldBlobs blobs;
     private final Map<String,Boolean> managed=new ConcurrentHashMap<>();
     private final Map<String,Long> versions=new ConcurrentHashMap<>();
+    List<String> loadedNames(){return List.copyOf(managed.keySet());}
     public LinkWorldDriver(EventStore store,Session guard,String node,WorldBlobs blobs){this.store=store;this.guard=guard;this.node=node;this.blobs=blobs;}
     private String key(String name){io.linkmc.api.LinkApi.requireName(name);return "world:"+node+"/"+name;}
     static <T> T main(Callable<T> task) throws Exception {

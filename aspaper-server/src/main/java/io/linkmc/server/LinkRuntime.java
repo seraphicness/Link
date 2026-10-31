@@ -101,8 +101,13 @@ public final class LinkRuntime implements LinkApi {
             }
             String redisUri=config.redisUri();
             if(redisUri!=null&&!redisUri.isBlank())runtime.notifications.scheduleWithFixedDelay(()->runtime.deliverNotifications(redisUri),0,5,TimeUnit.SECONDS);
-            LinkCommand.register(runtime);
-            LinkTravelCommand.register(runtime);
+            var completions=new LinkCompletions(runtime.driver::loadedNames,config.template());
+            runtime.notifications.scheduleWithFixedDelay(()->{
+                try{completions.refresh(runtime.database,runtime.node);}
+                catch(Exception error){net.minecraft.server.MinecraftServer.LOGGER.debug("Link completion catalog refresh failed",error);}
+            },0,2,TimeUnit.SECONDS);
+            LinkCommand.register(runtime,completions);
+            LinkTravelCommand.register(runtime,completions);
         }catch(Exception e){throw new IllegalStateException("Link world activation failed",e);}
     }
     public static void stop(){LinkRuntime runtime=instance;if(runtime!=null){instance=null;RuntimeProvider.uninstall(runtime);runtime.close();}}

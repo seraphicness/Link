@@ -18,6 +18,7 @@ final class LinkTravelCommand extends Command {
     private final boolean journal;
     private final Consumer<Runnable> dispatch;
     private final Consumer<Throwable> logError;
+    private LinkCompletions completions;
 
     LinkTravelCommand(String name, LinkApi.Network network, boolean journal,
                       Consumer<Runnable> dispatch, Consumer<Throwable> logError) {
@@ -29,14 +30,16 @@ final class LinkTravelCommand extends Command {
         if (name.equals("warp")) setPermission("link.warp");
     }
 
-    static void register(LinkApi api) {
+    static void register(LinkApi api,LinkCompletions completions) {
         var server = org.bukkit.Bukkit.getServer();
         if (server.getPluginManager().getPermission("link.warp") == null)
             server.getPluginManager().addPermission(new Permission("link.warp", PermissionDefault.OP));
         for (String name : List.of("spawn", "warp")) {
-            server.getCommandMap().register("link", new LinkTravelCommand(name, api.network(), NativeJournal.enabled(),
+            var command=new LinkTravelCommand(name, api.network(), NativeJournal.enabled(),
                 task -> net.minecraft.server.MinecraftServer.getServer().execute(task),
-                error -> net.minecraft.server.MinecraftServer.LOGGER.error("Link travel request failed", error)));
+                error -> net.minecraft.server.MinecraftServer.LOGGER.error("Link travel request failed", error));
+            command.completions=completions;
+            server.getCommandMap().register("link", command);
         }
     }
 
@@ -76,6 +79,7 @@ final class LinkTravelCommand extends Command {
     }
 
     @Override public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
-        return List.of();
+        if(!getName().equals("warp")||!journal||!(sender instanceof Player)||!testPermissionSilent(sender)||args.length!=1||completions==null)return List.of();
+        return completions.warps(args[0]);
     }
 }
