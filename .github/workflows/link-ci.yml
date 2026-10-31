@@ -7,6 +7,9 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        jdbc: ['jdbc:postgresql://localhost:5432/link_test', 'jdbc:mariadb://localhost:3306/link_test']
     services:
       postgres:
         image: postgres:17-alpine
@@ -21,8 +24,19 @@ jobs:
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: link_root_test
+          MARIADB_DATABASE: link_test
+          MARIADB_USER: link_test
+          MARIADB_PASSWORD: link_test_local
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      LINK_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/link_test
+      LINK_TEST_JDBC_URL: ${{ matrix.jdbc }}
       LINK_TEST_DB_USER: link_test
       LINK_TEST_DB_PASSWORD: link_test_local
       LINK_TEST_REDIS_URI: redis://localhost:6379
@@ -33,6 +47,6 @@ jobs:
           distribution: temurin
           java-version: '25'
       - run: git config --global user.name Link-CI && git config --global user.email link-ci@localhost
-      - run: bash gradlew :link-core:test :link-api:jar --console=plain
+      - run: bash gradlew :link-core:test :link-velocity:test :link-api:jar --console=plain
       - run: bash gradlew applyAllPatches --console=plain
-      - run: bash gradlew :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite --console=plain
+      - run: bash gradlew :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests 'io.linkmc.server.Link*TestSuite' --console=plain

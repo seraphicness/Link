@@ -1,8 +1,8 @@
 # Link
 
-**Minecraft 26.3 · Slime 템플릿 월드 · PostgreSQL · Redis · Velocity**
+**Minecraft 26.3 · Slime 템플릿 월드 · PostgreSQL/MariaDB · SlimeVault S3 · Redis · Velocity**
 
-Link는 AdvancedSlimePaper `dev/26.3`을 기반으로 개발하는 패치 방식의 서버 포크입니다. NMS를 수정해 Slime 템플릿으로 스폰과 인스턴스를 구성하고, 플레이어·월드 상태를 PostgreSQL에 저장하며, Velocity로 여러 백엔드 사이의 입장과 이동을 조정합니다.
+Link는 AdvancedSlimePaper `dev/26.3`을 기반으로 개발하는 패치 방식의 서버 포크입니다. NMS를 수정해 Slime 템플릿으로 스폰과 인스턴스를 구성하고, 플레이어·월드 상태를 PostgreSQL 또는 MariaDB에 저장하고 월드·템플릿 바이너리는 선택적으로 SlimeVault S3에 저장하며, Velocity로 여러 백엔드 사이의 입장과 이동을 조정합니다.
 
 > **개발 단계이며 현재 운영 투입 불가입니다.** 51명 부하에서 TPS 저하, 재접속 시 탑승 관계 유실, 서버 간 지도 픽셀 누락을 확인했습니다. `strict` 모드는 실행을 거부하며 `journal`은 격리된 테스트 환경용입니다. [검증 결과](docs/validation.md)를 먼저 확인하세요.
 
@@ -47,7 +47,7 @@ Linux/macOS에서는 `./gradlew`를 사용합니다. 결과는 `build/dist/`에 
 | `Link-Velocity-dev.jar` | Velocity의 `plugins/`에 설치하는 라우팅 모듈 |
 | `Link-API-dev.jar` | 플러그인 컴파일용 API. 서버에 설치하는 플러그인이 아님 |
 
-기본 모드는 `disabled`입니다. [실행 안내](docs/setup.md)에 따라 템플릿, DB, modern forwarding, `link.mode=journal`을 설정해야 합니다. Upstream 버전 문자열의 `stable`은 Link의 운영 안정성을 뜻하지 않습니다.
+첫 실행 시 서버 작업 폴더에 `link.yml`이 생성되며 기본 모드는 `disabled`입니다. [실행 안내](docs/setup.md)에 따라 YAML의 DB·노드·스폰 설정과 modern forwarding을 준비하고 `mode: journal`을 설정해야 합니다. 기존 환경 변수와 `-Dlink.*` 옵션도 지원합니다. Upstream 버전 문자열의 `stable`은 Link의 운영 안정성을 뜻하지 않습니다.
 
 ## 검증 상태
 

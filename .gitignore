@@ -21,3 +21,4 @@ paper-checkstyle/
 *-setup.log
 link-test.log
 link-integration/logs/
+/link.yml

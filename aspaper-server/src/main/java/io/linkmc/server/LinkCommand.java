@@ -12,15 +12,16 @@ import java.util.concurrent.CompletionStage;
 /** Administrative template tooling; never advertised as durable gameplay commands. */
 final class LinkCommand extends Command {
     private final LinkApi api;
-    LinkCommand(LinkApi api){
+    private final LinkCompletions completions;
+    LinkCommand(LinkApi api,LinkCompletions completions){
         super("link","Link template tools","/link <templates|worlds|editor|publish|create|load|save|unload|delete>",List.of());
-        this.api=api;setPermission("link.admin");
+        this.api=api;this.completions=completions;setPermission("link.admin");
     }
-    static void register(LinkApi api){
+    static void register(LinkApi api,LinkCompletions completions){
         var server=org.bukkit.Bukkit.getServer();
         if(server.getPluginManager().getPermission("link.admin")==null)
             server.getPluginManager().addPermission(new Permission("link.admin",PermissionDefault.OP));
-        server.getCommandMap().register("link",new LinkCommand(api));
+        server.getCommandMap().register("link",new LinkCommand(api,completions));
     }
     @Override public boolean execute(CommandSender sender,String label,String[] args){
         if(!testPermission(sender))return true;
@@ -53,4 +54,7 @@ final class LinkCommand extends Command {
         return true;
     }
     private static void count(String[] args,int expected){if(args.length!=expected)throw new IllegalArgumentException("Incorrect arguments. See Link documentation.");}
+    @Override public List<String> tabComplete(CommandSender sender,String alias,String[] args){
+        return testPermissionSilent(sender)?completions.admin(args):List.of();
+    }
 }

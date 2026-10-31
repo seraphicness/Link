@@ -80,7 +80,7 @@ $env:LINK_TEST_DB_PASSWORD='link_test_local'
 $env:LINK_TEST_REDIS_URI='redis://127.0.0.1:56379'
 .\gradlew.bat :link-core:test
 .\gradlew.bat applyAllPatches
-.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests io.linkmc.server.LinkPacketGateTestSuite
+.\gradlew.bat :link-velocity:shadowJar :link-integration:jar :aspaper-server:test --tests 'io.linkmc.server.Link*TestSuite'
 .\gradlew.bat linkDist
 ```
 
@@ -118,6 +118,22 @@ node link-integration/load-clients.cjs 51 4000 60000
 ```
 
 상태·개별 로그는 무시되는 `build/load-clients/`에 생성됩니다. `wire-client.cjs`는 `LINK_WIRE_NAME`, `LINK_WIRE_PORT`, `LINK_WIRE_DURATION_MS`로 테스트 이름·포트·실행 제한을 바꿀 수 있습니다. 로컬 `build/`의 시작·RCON 보조 스크립트와 비밀 설정은 저장소에 배포하지 않습니다.
+
+## 백엔드 YAML 설정 추가 검증
+
+`link.yml` 지원 추가 시 설정 테스트 7개와 기존 패킷 테스트 5개를 통과했습니다. 신규 파일 생성·기존 파일 보존·YAML 단독 값·환경 변수와 JVM 옵션 우선순위·잘못된 입력 거부·오류 메시지의 비밀 값 비노출을 확인했습니다. 새 작업 폴더에서 실제 JAR을 실행해 EULA 동의 전 파일 생성을 확인했고, DB 환경 변수와 `-Dlink.*` 없이 YAML만으로 `journal` 부팅을 확인했습니다. DB에서 노드 정원 34·월드 정원 17을 조회해 사용자 설정 적용도 검사했습니다. 9번째 Minecraft 패치 재적용이 성공했습니다.
+
+## MariaDB·SlimeVault 추가 검증 (2026-10-31)
+
+PostgreSQL 17 및 MariaDB 11.4 각각 Redis와 함께 코어 테스트 43개를 실행해 통과했습니다. MariaDB는 `ONLY_FULL_GROUP_BY`도 활성화했습니다. 트랜잭션·소유권·정원·이동 검사와 함께 리터럴 복구 prefix 조회, JVM 시간대와 무관한 임대 시각, S3 실패 시 템플릿 미발행, 리비전 참조 복원·체크섬 검사를 포함합니다. 서버 설정·패킷·명령어 테스트 19개도 통과했습니다.
+
+SlimeVault `a346212c59910682c5440180ea8512e8050a0100`을 직접 빌드해 writer 임대와 SRF 검증을 켠 상태에서 ASP 26.3 실제 월드 파일을 저장하고 정확한 VersionId로 읽었습니다. 잘못된 SRF는 거부됐습니다. 별도 MariaDB DB와 실제 Link JAR·Velocity에서 템플릿 없는 최초 편집 월드 입장, `/spawn`, 블록 변경, 템플릿 발행, 재시작 후 스폰 전환과 블록 복구를 확인했습니다. SQL 월드 payload는 S3 리비전 참조이고 플레이어 데이터는 SQL에 남는 것도 확인했습니다. SlimeVault 중단 시 네이티브 프레임이 실패하여 백엔드가 중단됐습니다.
+
+위 검사는 로컬 단일 SlimeVault 노드와 같은 백엔드 내 이동을 대상으로 합니다. S3를 사용하는 대규모 부하·다중 저장 노드 장애·모든 서버 간 이동 장애 조합·DB 전체 호스트 손실은 검증하지 않았습니다. 기존 운영 제한이 해결됐다는 의미가 아닙니다.
+
+## Velocity YAML 추가 검증 (2026-11-01)
+
+설정 파일 생성·기존 파일 보존·환경 변수 우선순위·비밀 값 비노출·잘못된 YAML 및 중복 키 거부 테스트 5개를 통과했습니다. 실제 Velocity에서 `plugins/link/config.yml` 생성을 확인하고, DB 환경 변수를 제거한 상태에서 YAML만으로 MariaDB 연결과 프록시 초기화가 완료되는 것을 확인했습니다. 최초 기본 파일의 비밀번호는 비어 있으므로 DB 설정 후 Velocity를 재시작해야 합니다.
 
 ## 미검증·미구현 범위
 
