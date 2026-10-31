@@ -5,6 +5,7 @@ final class MariaDialect {
     private MariaDialect(){}
     static String translate(String sql){
         String value=sql.replace("clock_timestamp()","CURRENT_TIMESTAMP(6)")
+            .replace("starts_with(id,?)","LOCATE(?,id)=1")
             .replace("?*interval '1 second'","INTERVAL ? SECOND")
             .replace("interval '1 second'","INTERVAL 1 SECOND")
             .replace("interval '15 seconds'","INTERVAL 15 SECOND")

@@ -125,6 +125,14 @@ class DatabaseIntegrationTest {
         storage.unavailable=false;templates.publish("ok",1,new byte[]{1,2});
         assertArrayEquals(new byte[]{1,2},templates.read("ok",1));
     }
+    @Test void nativeRecoveryPrefixIsLiteralAndOrdered()throws Exception{
+        assertTrue(events.prefix("native:test_a/").isEmpty());
+        events.commit(new Transaction(UUID.randomUUID(),List.of(),List.of(
+            new Change("native:test_a/world/z",0,1,"test",new byte[]{1}),
+            new Change("native:test_a/world/a",0,1,"test",new byte[]{2}),
+            new Change("native:testXa/world/b",0,1,"test",new byte[]{3}))));
+        assertEquals(List.of("native:test_a/world/a","native:test_a/world/z"),events.prefix("native:test_a/").stream().map(State::id).toList());
+    }
     @Test void leaseInstantIsIndependentOfJvmTimeZone()throws Exception{
         var before=TimeZone.getDefault();
         try{
