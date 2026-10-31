@@ -55,6 +55,33 @@ public final class LinkWorldDriver implements WorldService.Driver {
         var world=asp.getSerializer().deserializeWorld(name,bytes,null,properties(),true);
         asp.loadWorld(world,true);managed.put(name,NativeJournal.persistentWorld(name));
     }
+    private boolean newBootstrapEditor;
+    public SlimeWorld bootstrapEditor(String name)throws Exception {
+        byte[] saved=null;
+        if(NativeJournal.enabled()){
+            if(NativeJournal.knownWorld(name))saved=NativeJournal.storedWorld(name);
+            else NativeJournal.createdWorld(name,true);
+        }else{
+            var state=store.read(key(name));
+            if(state.isPresent()){
+                if(state.get().payload().length==0)throw new ConflictException("Bootstrap editor was deleted");
+                saved=state.get().payload();versions.put(name,state.get().version());
+            }else versions.put(name,0L);
+        }
+        newBootstrapEditor=saved==null;
+        managed.put(name,true);
+        return saved==null?asp.createEmptyWorld(name,true,properties(),null)
+            :asp.getSerializer().deserializeWorld(name,saved,null,properties(),true);
+    }
+    public void prepareBootstrapEditor(String name){
+        var world=Bukkit.getWorld(name);
+        world.setAutoSave(false);
+        if(newBootstrapEditor){
+            world.getWorldBorder().setSize(256);
+            for(int x=-4;x<=4;x++)for(int z=-4;z<=4;z++)world.getBlockAt(x,64,z).setType(org.bukkit.Material.BEDROCK);
+            world.setSpawnLocation(0,65,0);
+        }
+    }
     public WorldInfo createEditor(String name)throws Exception {
         key(name);
         if(store.read(key(name)).isPresent())throw new ConflictException("Stored world already exists");

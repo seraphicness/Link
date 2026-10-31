@@ -22,6 +22,8 @@ public final class LinkRuntime implements LinkApi {
     private volatile boolean closing;
     private final ScheduledExecutorService notifications=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Notifications").factory());
     private SpawnProvisioner provisioner;
+    private boolean templateEditor;
+    private String bootstrapWorld="link-spawn";
     private volatile Session nodeLease;
     private final ScheduledExecutorService heartbeat=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Heartbeat").factory());
     private LinkRuntime(Database db,String node)throws Exception {
@@ -51,8 +53,15 @@ public final class LinkRuntime implements LinkApi {
             try {
                 String template=config.template();
                 int version=config.templateVersion();
-                byte[] bytes=new TemplateStore(db).read(template,version);
-                SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrap("link-spawn",NativeJournal.worldOrTemplate("link-spawn",bytes)),null,null);
+                var published=new TemplateStore(db).find(template,version);
+                runtime.templateEditor=published.isEmpty();
+                if(runtime.templateEditor){
+                    runtime.bootstrapWorld="link-template-editor";
+                    SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrapEditor(runtime.bootstrapWorld),null,null);
+                    net.minecraft.server.MinecraftServer.LOGGER.warn("Spawn template {}:{} is missing. Opening link-template-editor. Build here, run /link publish link-template-editor {} {}, then restart.",template,version,template,version);
+                }else{
+                    SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrap("link-spawn",NativeJournal.worldOrTemplate("link-spawn",published.get())),null,null);
+                }
                 instance=runtime;RuntimeProvider.install(runtime);
                 runtime.heartbeat.scheduleWithFixedDelay(() -> {
                     try {
@@ -69,7 +78,7 @@ public final class LinkRuntime implements LinkApi {
                 },5,5,TimeUnit.SECONDS);
                 NativeJournal.finishStartup();
             } catch(Exception e){runtime.close();throw e;}
-        }catch(Exception e){throw new IllegalStateException("Link bootstrap failed; no fallback world will be created",e);}
+        }catch(Exception e){throw new IllegalStateException("Link bootstrap failed",e);}
     }
     public static boolean managesWorlds(){return instance!=null;}
     public static void afterWorlds(){
@@ -77,17 +86,18 @@ public final class LinkRuntime implements LinkApi {
         LinkRuntime runtime=instance;
         var config=LinkConfiguration.get();
         try{
+            if(runtime.templateEditor)runtime.driver.prepareBootstrapEditor(runtime.bootstrapWorld);
             if(NativeJournal.enabled()){
-                for(String name:NativeJournal.recoveredWorlds())if(!name.equals("link-spawn"))runtime.driver.restoreNative(name,NativeJournal.recoveredWorld(name));
+                for(String name:NativeJournal.recoveredWorlds())if(!name.equals(runtime.bootstrapWorld))runtime.driver.restoreNative(name,NativeJournal.recoveredWorld(name));
                 net.minecraft.server.MinecraftServer.getServer().linkRestoreSavedData();
                 NativeJournal.activate();
                 runtime.networkStore.heartbeat(runtime.node,config.nodeCapacity());
                 runtime.networkStore.reconcileNode(runtime.nodeLease);
-                for(var world:org.bukkit.Bukkit.getWorlds())if(world.getName().equals("link-spawn")||world.getName().startsWith("spawn-")){
+                for(var world:org.bukkit.Bukkit.getWorlds())if(runtime.templateEditor?world.getName().equals(runtime.bootstrapWorld):(world.getName().equals("link-spawn")||world.getName().startsWith("spawn-"))){
                     var pos=world.getSpawnLocation();
                     runtime.networkStore.register(runtime.node+":"+world.getName(),new Destination(runtime.node,world.getName(),pos.getX(),pos.getY(),pos.getZ(),pos.getYaw(),pos.getPitch()),config.worldCapacity());
                 }
-                runtime.provisioner=new SpawnProvisioner(runtime.worlds,runtime.networkStore,runtime.node,config.template(),config.templateVersion(),config.worldCapacity(),config.maxWorlds());
+                if(!runtime.templateEditor)runtime.provisioner=new SpawnProvisioner(runtime.worlds,runtime.networkStore,runtime.node,config.template(),config.templateVersion(),config.worldCapacity(),config.maxWorlds());
             }
             String redisUri=config.redisUri();
             if(redisUri!=null&&!redisUri.isBlank())runtime.notifications.scheduleWithFixedDelay(()->runtime.deliverNotifications(redisUri),0,5,TimeUnit.SECONDS);

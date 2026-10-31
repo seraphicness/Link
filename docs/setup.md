@@ -47,7 +47,7 @@ spawn:
   max-worlds: 3
 ```
 
-PostgreSQL에 DB·계정을 먼저 생성하고 `database` 항목을 입력하세요. 템플릿·Velocity 설정까지 준비한 뒤 `mode: journal`로 변경합니다. 비밀번호는 따옴표로 감싸고 작은따옴표 자체는 YAML 작은따옴표 문자열 안에서 두 번 적습니다. Redis 사용 시 `redis.enabled: true`로 바꿉니다.
+PostgreSQL에 DB·계정을 먼저 생성하고 `database` 항목을 입력하세요. Velocity 설정까지 준비한 뒤 `mode: journal`로 변경합니다. 비밀번호는 따옴표로 감싸고 작은따옴표 자체는 YAML 작은따옴표 문자열 안에서 두 번 적습니다. Redis 사용 시 `redis.enabled: true`로 바꿉니다.
 
 YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 실행할 수 있습니다. 접속 정보가 들어간 `link.yml`은 커밋하지 않습니다.
 
@@ -67,7 +67,11 @@ YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 �
 
 ## 첫 템플릿
 
-`journal` 시작 전에 호환되는 SRF `.slime` 파일을 준비하고, DB 환경 변수가 설정된 셸에서 발행합니다.
+`journal` 시작 시 설정한 스폰 템플릿 버전이 없으면 `link-template-editor`라는 편집 월드를 자동 생성하고, 접속자를 이 월드로 배정합니다. 9×9 기반암 발판에서 건축을 시작할 수 있으며 편집 내용은 DB에 저장되어 재시작 후 복구됩니다. 편집 상태에서는 추가 스폰 복제를 하지 않습니다. DB 장애나 템플릿 손상은 편집 월드로 우회하지 않고 부팅 오류로 처리합니다.
+
+기본 설정이라면 건축 후 `/link publish link-template-editor lobby 1`을 실행하고 완료 메시지를 확인한 뒤 재시작하세요. 다음 부팅부터 발행한 템플릿으로 스폰을 구성하며 편집 월드는 보존됩니다. 템플릿 이름·버전을 바꿨다면 발행 명령도 `link.yml`의 `spawn.template`·`spawn.version`과 맞추세요. 템플릿 자동 전환에는 재시작이 필요합니다.
+
+기존 SRF `.slime` 파일이 있다면 DB 환경 변수가 설정된 셸에서 미리 발행할 수도 있습니다.
 
 ```powershell
 .\gradlew.bat :link-core:publishTemplate -PtemplateName=lobby -PtemplateVersion=1 -PtemplateFile=C:/maps/lobby.slime

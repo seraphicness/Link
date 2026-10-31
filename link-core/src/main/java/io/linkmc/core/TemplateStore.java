@@ -25,13 +25,17 @@ public final class TemplateStore {
         });
     }
     public byte[] read(String name,int version) throws Exception {
+        return find(name,version).orElseThrow(() -> new ConflictException("Unknown template version"));
+    }
+    /** Only absence returns empty; database and checksum failures must still stop startup. */
+    public Optional<byte[]> find(String name,int version) throws Exception {
         LinkApi.requireName(name);
         return db.transaction(c -> {
             try(var s=sql(c,"SELECT payload,sha256 FROM link_templates WHERE name=? AND version=?",name,version);var r=s.executeQuery()) {
-                if(!r.next()) throw new ConflictException("Unknown template version");
+                if(!r.next()) return Optional.empty();
                 byte[] bytes=r.getBytes(1);
                 if(!MessageDigest.isEqual(MessageDigest.getInstance("SHA-256").digest(bytes),r.getBytes(2))) throw new ConflictException("Template checksum mismatch");
-                return bytes;
+                return Optional.of(bytes);
             }
         });
     }

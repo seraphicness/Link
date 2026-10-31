@@ -108,11 +108,14 @@ class DatabaseIntegrationTest {
     }
     @Test void templatesCannotBeOverwrittenAndVerifyDigest() throws Exception {
         TemplateStore store=new TemplateStore(db);byte[] original={1,2,3};
+        assertTrue(store.find("lobby",1).isEmpty());
+        assertThrows(ConflictException.class,() -> store.read("lobby",1));
         store.publish("lobby",1,original);store.publish("lobby",1,original);
         assertThrows(ConflictException.class,() -> store.publish("lobby",1,new byte[]{4}));
         assertArrayEquals(original,store.read("lobby",1));
         db.transaction(c -> {update(c,"UPDATE link_templates SET payload=?",new byte[]{9});return null;});
         assertThrows(ConflictException.class,() -> store.read("lobby",1));
+        assertThrows(ConflictException.class,() -> store.find("lobby",1));
     }
     @Test void transferKeepsSourceAdmissionUntilTargetOwnsPlayer() throws Exception {
         network.heartbeat("a",1);network.heartbeat("b",1);
