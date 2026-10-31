@@ -11,6 +11,9 @@ dependencies {
     }
     compileOnly("com.velocitypowered:velocity-api:4.3.1")
     annotationProcessor("com.velocitypowered:velocity-api:4.3.1")
+    implementation("org.yaml:snakeyaml:2.4")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 tasks.shadowJar {
     archiveBaseName.set("link-velocity")
@@ -20,7 +23,9 @@ tasks.shadowJar {
     relocate("reactor", "io.linkmc.velocity.internal.reactor")
     relocate("org.reactivestreams", "io.linkmc.velocity.internal.reactivestreams")
     relocate("com.zaxxer.hikari", "io.linkmc.velocity.internal.hikari")
+    relocate("org.yaml.snakeyaml", "io.linkmc.velocity.internal.snakeyaml")
     exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA")
 }
 tasks.build { dependsOn(tasks.shadowJar) }
 tasks.jar { archiveClassifier.set("plain") }
+tasks.test { useJUnitPlatform() }

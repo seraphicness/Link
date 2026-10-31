@@ -6,12 +6,13 @@ import com.velocitypowered.api.event.player.*;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.proxy.*;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import java.nio.file.Path;
 import com.velocitypowered.api.proxy.*;
 import io.linkmc.core.*;
 import io.linkmc.api.LinkApi.*;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
-import java.sql.DriverManager;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -21,6 +22,7 @@ public final class LinkVelocity {
     private record Pending(UUID ticket,Reservation reservation){}
     private final ProxyServer proxy;
     private final Logger logger;
+    private final Path dataDirectory;
     private final ExecutorService worker=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(256),Thread.ofPlatform().name("Link-Proxy-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
     private final Map<UUID,Pending> pending=new ConcurrentHashMap<>();
     private final Set<UUID> travelling=ConcurrentHashMap.newKeySet();
@@ -31,10 +33,10 @@ public final class LinkVelocity {
     private LinkService service;
     public io.linkmc.api.LinkApi api(){return Objects.requireNonNull(service,"Link proxy not initialized");}
     private final java.util.concurrent.atomic.AtomicBoolean polling=new java.util.concurrent.atomic.AtomicBoolean();
-    @Inject public LinkVelocity(ProxyServer proxy,Logger logger){this.proxy=proxy;this.logger=logger;}
+    @Inject public LinkVelocity(ProxyServer proxy,Logger logger,@DataDirectory Path dataDirectory){this.proxy=proxy;this.logger=logger;this.dataDirectory=dataDirectory;}
     @Subscribe public void initialize(ProxyInitializeEvent event)throws Exception{
-        String url=required("LINK_JDBC_URL"),user=required("LINK_DB_USER"),password=required("LINK_DB_PASSWORD");
-        Database db=Database.pooled(url,user,password);database=db;db.migrate();
+        var config=VelocityConfiguration.load(dataDirectory,System.getenv());
+        Database db=Database.pooled(config.jdbcUrl(),config.username(),config.password());database=db;db.migrate();
         service=new LinkService(db);RuntimeProvider.install(service);
         network=new NetworkStore(db);arrivals=new ArrivalStore(db);routes=new RouteStore(db);
         proxy.getScheduler().buildTask(this,()->{
@@ -95,5 +97,4 @@ public final class LinkVelocity {
         try{routes.finish(request.ticket(),false);arrivals.cancel(request.ticket(),id);network.cancel(request.reservation().id(),id);}catch(Exception e){logger.warn("Arrival cleanup deferred until expiry",e);}
     }
     @Subscribe public void shutdown(ProxyShutdownEvent event){worker.shutdownNow();if(service!=null){RuntimeProvider.uninstall(service);service.close();}if(database!=null)database.close();}
-    private static String required(String name){String value=System.getenv(name);if(value==null||value.isBlank())throw new IllegalStateException("Missing "+name);return value;}
 }

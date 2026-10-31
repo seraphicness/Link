@@ -72,7 +72,7 @@ YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 �
 
 ## 환경 변수와 기존 옵션
 
-백엔드는 아래 환경 변수를 YAML보다 우선 적용합니다. 모드·스폰·정원은 기존 `-Dlink.*` 옵션이 우선합니다. 환경 변수의 비밀 값은 생성 파일에 복사하지 않습니다. **Velocity 플러그인과 오프라인 템플릿 발행 도구는 여전히 환경 변수를 사용합니다.** 백엔드의 YAML을 자동 공유하지 않습니다. 백엔드 노드 이름은 `node.id` 또는 `LINK_NODE_ID`로 지정합니다.
+백엔드는 아래 환경 변수를 YAML보다 우선 적용합니다. 모드·스폰·정원은 기존 `-Dlink.*` 옵션이 우선합니다. 환경 변수의 비밀 값은 생성 파일에 복사하지 않습니다. Velocity 플러그인도 전용 YAML을 읽으며 같은 DB 환경 변수가 우선합니다. **오프라인 템플릿 발행 도구는 환경 변수를 사용합니다.** 백엔드의 YAML을 자동 공유하지 않습니다. 백엔드 노드 이름은 `node.id` 또는 `LINK_NODE_ID`로 지정합니다.
 
 | 변수 | 대상 | 의미 |
 | --- | --- | --- |
@@ -100,13 +100,26 @@ YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 �
 
 오프라인 발행 도구에서도 S3를 쓰려면 `LINK_WORLD_STORAGE=slimevault`, `LINK_S3_ENDPOINT`, `LINK_S3_BUCKET`, `LINK_S3_ACCESS_KEY`, `LINK_S3_SECRET_KEY`를 설정합니다. 선택 값은 `LINK_S3_REGION`(기본 `slimevault`), `LINK_S3_PREFIX`(기본 `link`)입니다. SQL 접속 환경 변수도 필요합니다.
 
+## Velocity 플러그인 `plugins/link/config.yml`
+
+플러그인 JAR을 설치하고 Velocity를 한 번 실행하면 `plugins/link/config.yml`이 생성됩니다. 첫 실행의 비밀번호는 비어 있으므로 Link 초기화 오류와 함께 설정 안내가 표시됩니다. 파일을 수정하고 Velocity를 재시작하세요. 기존 파일은 덮어쓰지 않습니다.
+
+```yaml
+database:
+  jdbc-url: 'jdbc:mariadb://127.0.0.1:3306/link'
+  username: 'link'
+  password: 'DB비밀번호'
+```
+
+PostgreSQL은 `jdbc:postgresql://127.0.0.1:5432/link`로 지정합니다. 버킷과 같은 DB를 사용해야 합니다. `LINK_JDBC_URL`, `LINK_DB_USER`, `LINK_DB_PASSWORD`가 설정돼 있으면 YAML보다 우선하므로 YAML 변경을 적용하려면 기존 환경 변수도 확인하세요. 프록시에는 S3 설정이 필요하지 않으며 Link 명령어는 계속 버킷에서만 처리합니다.
+
 ## Velocity 연결
 
 1. Velocity의 `plugins/`에 `Link-Velocity-dev.jar`를 설치합니다.
 2. 서버 목록에 백엔드를 등록합니다. 등록 이름은 각 백엔드의 `node.id`(또는 `LINK_NODE_ID`)와 같아야 합니다.
 3. 프록시의 modern forwarding과 온라인 인증을 설정합니다.
 4. 백엔드 Paper 설정에서 Velocity 지원과 프록시 `online-mode`를 활성화하고 forwarding secret을 동일하게 설정합니다. `server.properties`의 백엔드 `online-mode`와 Paper의 프록시 `online-mode`는 서로 다른 설정입니다. 프록시 인증을 사용하는 백엔드는 일반적으로 `server.properties`에서 `online-mode=false`를 사용합니다.
-5. 백엔드 포트에는 신뢰하는 프록시만 접근하도록 구성하고, 백엔드는 `link.yml`, 프록시는 환경 변수로 DB 접속 정보를 설정합니다.
+5. 백엔드 포트에는 신뢰하는 프록시만 접근하도록 구성하고, 백엔드는 `link.yml`, 프록시는 `plugins/link/config.yml`로 DB 접속 정보를 설정합니다.
 
 `journal`은 백엔드의 Velocity 활성화·프록시 온라인 모드 설정·비어 있지 않은 secret을 검사합니다. 직접 백엔드 접속은 거부됩니다. 로컬 부하 검사는 루프백 offline-auth 프록시를 사용했으며 Mojang 인증 검증을 대신하지 않습니다.
 
