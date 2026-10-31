@@ -11,6 +11,7 @@ public final class LinkConfiguration {
     private static LinkConfiguration instance;
     private final String mode, node, jdbcUrl, username, password, redisUri, template;
     private final int templateVersion, worldCapacity, nodeCapacity, maxWorlds;
+    private final String storage,endpoint,region,bucket,prefix,accessKey,secretKey;
     public static synchronized LinkConfiguration get(){
         if(instance==null)instance=load(Path.of("link.yml"),System.getenv(),System.getProperties());
         return instance;
@@ -40,9 +41,17 @@ public final class LinkConfiguration {
         worldCapacity=positive(yaml,props,"spawn.capacity","link.spawn.capacity",50);
         nodeCapacity=positive(yaml,props,"node.capacity","link.node.capacity",150);
         maxWorlds=positive(yaml,props,"spawn.max-worlds","link.spawn.max-worlds",3);
+        storage=string(yaml,"storage.worlds","database");
+        if(!java.util.Set.of("database","slimevault").contains(storage))throw new IllegalArgumentException("storage.worlds must be database or slimevault");
+        endpoint=string(yaml,"storage.slimevault.endpoint","http://127.0.0.1:3900");
+        region=string(yaml,"storage.slimevault.region","slimevault");
+        bucket=string(yaml,"storage.slimevault.bucket","worlds");
+        prefix=string(yaml,"storage.slimevault.prefix","link");
+        accessKey=env.getOrDefault("LINK_S3_ACCESS_KEY",string(yaml,"storage.slimevault.access-key",""));
+        secretKey=env.getOrDefault("LINK_S3_SECRET_KEY",string(yaml,"storage.slimevault.secret-key",""));
         io.linkmc.api.LinkApi.requireName(node);io.linkmc.api.LinkApi.requireName(template);
         if(mode.equals("journal")||mode.equals("tools")){
-            if(!jdbcUrl.startsWith("jdbc:postgresql:")||username.isBlank()||password.isBlank())
+            if((!jdbcUrl.startsWith("jdbc:postgresql:")&&!jdbcUrl.startsWith("jdbc:mariadb:"))||username.isBlank()||password.isBlank())
                 throw new IllegalArgumentException("Configure database.jdbc-url, username and password in link.yml (or LINK_JDBC_URL, LINK_DB_USER, LINK_DB_PASSWORD)");
         }
     }
@@ -66,6 +75,9 @@ public final class LinkConfiguration {
     public int worldCapacity(){return worldCapacity;}
     public int nodeCapacity(){return nodeCapacity;}
     public int maxWorlds(){return maxWorlds;}
+    public io.linkmc.core.WorldBlobs.Store worldStorage(){
+        return storage.equals("database")?null:new io.linkmc.core.SlimeVaultStore(endpoint,region,bucket,prefix,accessKey,secretKey);
+    }
     private static final String DEFAULTS="""
         # Link backend configuration. Restart the server after editing.
         # Environment variables override database/node/Redis values.
@@ -76,9 +88,19 @@ public final class LinkConfiguration {
           id: node-a
           capacity: 150
         database:
+          # Supports jdbc:postgresql://host:5432/link or jdbc:mariadb://host:3306/link
           jdbc-url: 'jdbc:postgresql://127.0.0.1:5432/link'
           username: 'link'
           password: ''
+        storage:
+          worlds: database
+          slimevault:
+            endpoint: 'http://127.0.0.1:3900'
+            region: slimevault
+            bucket: worlds
+            prefix: link
+            access-key: ''
+            secret-key: ''
         redis:
           enabled: false
           uri: 'redis://127.0.0.1:6379'

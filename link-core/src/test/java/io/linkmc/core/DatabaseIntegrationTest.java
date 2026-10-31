@@ -19,7 +19,7 @@ class DatabaseIntegrationTest {
         Assumptions.assumeTrue(url!=null,"Set LINK_TEST_JDBC_URL for PostgreSQL integration tests");
         db=new Database(() -> DriverManager.getConnection(url,System.getenv("LINK_TEST_DB_USER"),System.getenv("LINK_TEST_DB_PASSWORD")));
         db.migrate();
-        db.transaction(c -> {update(c,"TRUNCATE link_routes,link_arrivals,link_reservations,link_channels,link_nodes,link_transfers,link_sessions,link_outbox,link_events,link_state,link_operations,link_templates,link_warps CASCADE");return null;});
+        db.transaction(c -> {for(String table:"link_routes,link_arrivals,link_reservations,link_channels,link_nodes,link_transfers,link_sessions,link_outbox,link_events,link_state,link_operations,link_templates,link_warps".split(","))update(c,"DELETE FROM "+table);return null;});
         events=new EventStore(db);sessions=new SessionStore(db,30);network=new NetworkStore(db);
     }
     private Transaction change(Session s,UUID op,long expected,String value) {
@@ -116,6 +116,23 @@ class DatabaseIntegrationTest {
         db.transaction(c -> {update(c,"UPDATE link_templates SET payload=?",new byte[]{9});return null;});
         assertThrows(ConflictException.class,() -> store.read("lobby",1));
         assertThrows(ConflictException.class,() -> store.find("lobby",1));
+    }
+    @Test void failedObjectUploadNeverPublishesTemplate()throws Exception{
+        var storage=new WorldBlobsTest.Memory();storage.unavailable=true;db.worldStorage(storage);
+        var templates=new TemplateStore(db);
+        assertThrows(java.io.IOException.class,()->templates.publish("failed",1,new byte[]{1}));
+        assertTrue(templates.find("failed",1).isEmpty());
+        storage.unavailable=false;templates.publish("ok",1,new byte[]{1,2});
+        assertArrayEquals(new byte[]{1,2},templates.read("ok",1));
+    }
+    @Test void leaseInstantIsIndependentOfJvmTimeZone()throws Exception{
+        var before=TimeZone.getDefault();
+        try{
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Seoul"));
+            var owner=sessions.acquire(UUID.randomUUID(),"timezone-test");
+            long remaining=java.time.Duration.between(java.time.Instant.now(),owner.expiresAt()).toSeconds();
+            assertTrue(remaining>=20&&remaining<=31,"Lease must be about 30 seconds, not shifted by hours");
+        }finally{TimeZone.setDefault(before);}
     }
     @Test void transferKeepsSourceAdmissionUntilTargetOwnsPlayer() throws Exception {
         network.heartbeat("a",1);network.heartbeat("b",1);

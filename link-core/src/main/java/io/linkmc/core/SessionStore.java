@@ -57,7 +57,7 @@ public final class SessionStore {
     static Session get(Connection c, UUID player) throws SQLException {
         try(var s=sql(c,"SELECT node,epoch,expires_at FROM link_sessions WHERE player=?",player); var r=s.executeQuery()) {
             if(!r.next()) throw new ConflictException("Missing session");
-            return new Session(player,r.getString(1),r.getLong(2),r.getTimestamp(3).toInstant());
+            return new Session(player,r.getString(1),r.getLong(2),instant(r,3));
         }
     }
     public Transfer prepare(Session source, UUID operation, Destination dest) throws Exception {

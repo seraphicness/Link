@@ -20,9 +20,10 @@ public final class LinkWorldDriver implements WorldService.Driver {
     private final EventStore store;
     private final Session guard;
     private final String node;
+    private final WorldBlobs blobs;
     private final Map<String,Boolean> managed=new ConcurrentHashMap<>();
     private final Map<String,Long> versions=new ConcurrentHashMap<>();
-    public LinkWorldDriver(EventStore store,Session guard,String node){this.store=store;this.guard=guard;this.node=node;}
+    public LinkWorldDriver(EventStore store,Session guard,String node,WorldBlobs blobs){this.store=store;this.guard=guard;this.node=node;this.blobs=blobs;}
     private String key(String name){io.linkmc.api.LinkApi.requireName(name);return "world:"+node+"/"+name;}
     static <T> T main(Callable<T> task) throws Exception {
         if(Bukkit.isPrimaryThread())return task.call();
@@ -65,7 +66,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
             var state=store.read(key(name));
             if(state.isPresent()){
                 if(state.get().payload().length==0)throw new ConflictException("Bootstrap editor was deleted");
-                saved=state.get().payload();versions.put(name,state.get().version());
+                saved=blobs.decode(state.get().payload());versions.put(name,state.get().version());
             }else versions.put(name,0L);
         }
         newBootstrapEditor=saved==null;
@@ -135,7 +136,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
         });
         State state=store.read(key(name)).orElseThrow(() -> new ConflictException("Unknown stored world"));
         if(state.payload().length==0)throw new ConflictException("World was deleted");
-        SlimeWorld world=asp.getSerializer().deserializeWorld(name,state.payload(),null,properties(),true);
+        SlimeWorld world=asp.getSerializer().deserializeWorld(name,blobs.decode(state.payload()),null,properties(),true);
         return main(() -> {
             asp.loadWorld(world,true);managed.put(name,true);versions.put(name,state.version());
             Bukkit.getWorld(name).setAutoSave(false);return new WorldInfo(name,true,0);
@@ -146,7 +147,7 @@ public final class LinkWorldDriver implements WorldService.Driver {
         if(!Boolean.TRUE.equals(managed.get(name)))throw new ConflictException("Temporary worlds are never saved");
         byte[] bytes=snapshot(name);
         long version=versions.get(name);
-        store.commit(new Transaction(UUID.randomUUID(),List.of(guard),List.of(new Change(key(name),version,1,"world:checkpoint",bytes))));
+        store.commit(new Transaction(UUID.randomUUID(),List.of(guard),List.of(new Change(key(name),version,1,"world:checkpoint",blobs.encode(key(name),bytes)))));
         versions.put(name,version+1);
     }
     public void unload(String name)throws Exception {

@@ -41,4 +41,10 @@ class LinkConfigurationTestSuite {
     @Test void redisIsDisabledUnlessEnabledOrExplicitlyOverridden()throws Exception{
         Files.writeString(file(),"redis:\n  enabled: false\n  uri: 'redis://localhost:6379'\n");assertEquals("",load().redisUri());
     }
+    @Test void supportsMariaDbAndSlimeVaultWithoutPersistingEnvironmentSecrets()throws Exception{
+        Files.writeString(file(),"mode: journal\ndatabase:\n  jdbc-url: 'jdbc:mariadb://localhost/link'\n  username: link\n  password: 'db-secret'\nstorage:\n  worlds: slimevault\n");
+        var config=LinkConfiguration.load(file(),Map.of("LINK_S3_ACCESS_KEY","test-access","LINK_S3_SECRET_KEY","test-secret"),new Properties());
+        assertTrue(config.jdbcUrl().startsWith("jdbc:mariadb:"));assertNotNull(config.worldStorage());
+        assertFalse(Files.readString(file()).contains("test-secret"));
+    }
 }

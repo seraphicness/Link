@@ -23,7 +23,7 @@ public final class NativeJournal {
         if(!config.mode().equals("journal")||enabled())return;
         try{
             String node=config.node();
-            Database db=Database.pooled(config.jdbcUrl(),config.username(),config.password());db.migrate();
+            Database db=Database.pooled(config.jdbcUrl(),config.username(),config.password());db.worldStorage(config.worldStorage());db.migrate();
             SessionStore leases=new SessionStore(db,30);
             startupLease=leases.acquire(UUID.nameUUIDFromBytes(("link-node:"+node).getBytes(StandardCharsets.UTF_8)),node);
             initialize(db,node,()->startupLease);
@@ -111,7 +111,7 @@ public final class NativeJournal {
             if(slime==null)throw new IllegalStateException("Native journal only accepts slime worlds: "+world.getName());
             worldNames.add(world.getName());
             byte[] bytes=AdvancedSlimePaperAPI.instance().getSerializer().serializeWorld(slime.getSerializableCopy());
-            BlobSnapshots.put(snapshots,worldKey(world.getName()),bytes);
+            BlobSnapshots.put(snapshots,worldKey(world.getName()),db.worldBlobs().encode(worldKey(world.getName()),bytes));
         }
         Collections.sort(worldNames);snapshots.put("native:"+node+"/worlds",String.join("\n",worldNames).getBytes(StandardCharsets.UTF_8));
         catalog.forEach((name,state)->snapshots.put("native:"+node+"/catalog/"+name,new byte[]{state}));
@@ -182,10 +182,14 @@ public final class NativeJournal {
     public static void seedStorage(String world,CompoundTag seed){if(enabled())instance.storageSeeds.put(instance.storageKey(java.nio.file.Path.of("link-saved-worlds",world)),seed.copy());}
     public static void registerStorage(net.minecraft.world.level.storage.SavedDataStorage storage,java.nio.file.Path path){if(enabled())instance.storages.put(instance.storageKey(path),storage);}
     private String worldKey(String name){return "native:"+node+"/world/"+name;}
+    private static Optional<byte[]> snapshot(String name)throws Exception{
+        var stored=BlobSnapshots.get(instance.restored,instance.worldKey(name));
+        return stored.isEmpty()?Optional.empty():Optional.of(instance.db.worldBlobs().decode(stored.get()));
+    }
     static byte[] worldOrTemplate(String name,byte[] template)throws Exception{
         if(!enabled())return template;
         instance.catalog.putIfAbsent(name,(byte)0);
-        return BlobSnapshots.get(instance.restored,instance.worldKey(name)).orElse(template);
+        return snapshot(name).orElse(template);
     }
     static void createdWorld(String name,boolean persistent){
         if(enabled()&&instance.catalog.putIfAbsent(name,(byte)(persistent?1:0))!=null)throw new ConflictException("World identity already exists; choose a new name");
@@ -194,7 +198,7 @@ public final class NativeJournal {
     static boolean persistentWorld(String name){return enabled()&&Objects.equals(instance.catalog.get(name),(byte)1);}
     static byte[] storedWorld(String name)throws Exception{
         if(!instance.catalog.containsKey(name)||Objects.equals(instance.catalog.get(name),(byte)2))throw new ConflictException("Unknown or deleted world");
-        return BlobSnapshots.get(instance.restored,instance.worldKey(name)).orElseThrow(()->new ConflictException("World has no committed snapshot"));
+        return snapshot(name).orElseThrow(()->new ConflictException("World has no committed snapshot"));
     }
     static void deleteWorld(String name){
         if(!knownWorld(name))throw new ConflictException("Unknown world");instance.catalog.put(name,(byte)2);
@@ -204,7 +208,7 @@ public final class NativeJournal {
         byte[] data=instance.restored.get("native:"+instance.node+"/worlds");
         return data==null?List.of():Arrays.asList(new String(data,StandardCharsets.UTF_8).split("\n"));
     }
-    static byte[] recoveredWorld(String name)throws Exception{return BlobSnapshots.get(instance.restored,instance.worldKey(name)).orElseThrow();}
+    static byte[] recoveredWorld(String name)throws Exception{return snapshot(name).orElseThrow();}
     public static void prepare(UUID player,Connection connection){
         if(!enabled())return;
         NativeJournal j=instance;

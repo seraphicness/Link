@@ -31,7 +31,7 @@ public final class LinkRuntime implements LinkApi {
         leases=new SessionStore(db,30);
         nodeLease=NativeJournal.enabled()?NativeJournal.startupOwner():leases.acquire(UUID.nameUUIDFromBytes(("link-node:"+node).getBytes(StandardCharsets.UTF_8)),node);
         service=new LinkService(db);
-        driver=new LinkWorldDriver(new EventStore(db),nodeLease,node);
+        driver=new LinkWorldDriver(new EventStore(db),nodeLease,node,db.worldBlobs());
         worlds=new WorldService(driver,new TemplateStore(db));
     }
     /** Called from PaperWorldLoader before any default dimension is constructed. */
@@ -48,7 +48,7 @@ public final class LinkRuntime implements LinkApi {
         try {
             String url=config.jdbcUrl(),user=config.username(),password=config.password();
             String node=config.node();
-            Database db=NativeJournal.enabled()?NativeJournal.database():Database.pooled(url,user,password);db.migrate();
+            Database db=NativeJournal.enabled()?NativeJournal.database():Database.pooled(url,user,password);if(!NativeJournal.enabled())db.worldStorage(config.worldStorage());db.migrate();
             LinkRuntime runtime=new LinkRuntime(db,node);
             try {
                 String template=config.template();

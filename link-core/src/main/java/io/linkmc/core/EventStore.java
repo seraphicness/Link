@@ -74,7 +74,7 @@ public final class EventStore {
             List<Event> events = new ArrayList<>();
             try (var s = sql(c, "SELECT operation,version,schema_version,payload,type,created_at FROM link_events WHERE aggregate_id=? AND version>? ORDER BY version LIMIT ?", id, after, limit);
                  var r = s.executeQuery()) {
-                while (r.next()) events.add(new Event(r.getObject(1, UUID.class), new State(id,r.getLong(2),r.getInt(3),r.getBytes(4)),r.getString(5),r.getTimestamp(6).toInstant()));
+                while (r.next()) events.add(new Event(r.getObject(1, UUID.class), new State(id,r.getLong(2),r.getInt(3),r.getBytes(4)),r.getString(5),instant(r,6)));
             }
             return List.copyOf(events);
         });

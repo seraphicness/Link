@@ -13,6 +13,7 @@ public final class TemplateStore {
         LinkApi.requireName(name);
         if(version<1 || srf.length==0) throw new IllegalArgumentException("Invalid template");
         byte[] bytes=srf.clone(), digest=MessageDigest.getInstance("SHA-256").digest(bytes);
+        byte[] stored=db.worldBlobs().encode("template:"+name+":"+version,bytes);
         db.transaction(c -> {
             lock(c,"template:"+name+":"+version);
             try(var s=sql(c,"SELECT sha256 FROM link_templates WHERE name=? AND version=?",name,version);var r=s.executeQuery()) {
@@ -21,7 +22,7 @@ public final class TemplateStore {
                     return null;
                 }
             }
-            update(c,"INSERT INTO link_templates(name,version,payload,sha256) VALUES (?,?,?,?)",name,version,bytes,digest); return null;
+            update(c,"INSERT INTO link_templates(name,version,payload,sha256) VALUES (?,?,?,?)",name,version,stored,digest); return null;
         });
     }
     public byte[] read(String name,int version) throws Exception {
@@ -33,7 +34,7 @@ public final class TemplateStore {
         return db.transaction(c -> {
             try(var s=sql(c,"SELECT payload,sha256 FROM link_templates WHERE name=? AND version=?",name,version);var r=s.executeQuery()) {
                 if(!r.next()) return Optional.empty();
-                byte[] bytes=r.getBytes(1);
+                byte[] bytes=db.worldBlobs().decode(r.getBytes(1));
                 if(!MessageDigest.isEqual(MessageDigest.getInstance("SHA-256").digest(bytes),r.getBytes(2))) throw new ConflictException("Template checksum mismatch");
                 return Optional.of(bytes);
             }

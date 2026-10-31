@@ -24,9 +24,12 @@ public final class NetworkStore {
         if(capacity<1) throw new IllegalArgumentException("Invalid capacity");
         db.transaction(c -> {
             lock(c,"allocation");
-            int changed=update(c,"INSERT INTO link_channels(id,node,world,capacity,ready,x,y,z,yaw,pitch) VALUES (?,?,?,?,true,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET capacity=excluded.capacity,ready=true,x=excluded.x,y=excluded.y,z=excluded.z,yaw=excluded.yaw,pitch=excluded.pitch WHERE link_channels.node=excluded.node AND link_channels.world=excluded.world",
+            try(var check=sql(c,"SELECT node,world FROM link_channels WHERE id=?",id);var row=check.executeQuery()){
+                if(row.next()&&(!row.getString(1).equals(spawn.node())||!row.getString(2).equals(spawn.world())))throw new ConflictException("Channel ID belongs to another world");
+            }
+            update(c,"INSERT INTO link_channels(id,node,world,capacity,ready,x,y,z,yaw,pitch) VALUES (?,?,?,?,true,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET capacity=excluded.capacity,ready=true,x=excluded.x,y=excluded.y,z=excluded.z,yaw=excluded.yaw,pitch=excluded.pitch",
                     id,spawn.node(),spawn.world(),capacity,spawn.x(),spawn.y(),spawn.z(),spawn.yaw(),spawn.pitch());
-            if(changed!=1)throw new ConflictException("Channel ID belongs to another world");
+
             return null;
         });
     }
@@ -44,7 +47,7 @@ public final class NetworkStore {
     public List<Channel> channels() throws Exception {
         return db.transaction(c -> {
             List<Channel> result=new ArrayList<>();
-            try(var s=sql(c,"SELECT c.*,count(r.id) FILTER(WHERE r.state='ADMITTED') AS occupied,count(DISTINCT r.player)-count(DISTINCT r.player) FILTER(WHERE r.state='ADMITTED') AS reserved FROM link_channels c JOIN link_nodes n ON n.id=c.node LEFT JOIN link_reservations r ON r.channel=c.id AND r.expires_at>clock_timestamp() WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' GROUP BY c.id ORDER BY c.id"); var r=s.executeQuery()) {
+            try(var s=sql(c,"SELECT c.id,c.node,c.world,c.capacity,count(r.id) FILTER(WHERE r.state='ADMITTED') AS occupied,count(DISTINCT r.player)-count(DISTINCT r.player) FILTER(WHERE r.state='ADMITTED') AS reserved FROM link_channels c JOIN link_nodes n ON n.id=c.node LEFT JOIN link_reservations r ON r.channel=c.id AND r.expires_at>clock_timestamp() WHERE c.ready AND n.heartbeat>clock_timestamp()-interval '15 seconds' GROUP BY c.id,c.node,c.world,c.capacity ORDER BY c.id"); var r=s.executeQuery()) {
                 while(r.next()) result.add(new Channel(r.getString("id"),r.getString("node"),r.getString("world"),r.getInt("capacity"),r.getInt("occupied"),r.getInt("reserved")));
             }
             return List.copyOf(result);
@@ -79,7 +82,7 @@ public final class NetworkStore {
                 String channel=r.getString("id");
                 Destination destination=target!=null?target:new Destination(r.getString("node"),r.getString("world"),r.getDouble("x"),r.getDouble("y"),r.getDouble("z"),r.getFloat("yaw"),r.getFloat("pitch"));
                 try(var insert=sql(c,"INSERT INTO link_reservations(id,player,channel,state,expires_at,x,y,z,yaw,pitch) VALUES (?,?,?,'RESERVED',clock_timestamp()+interval '30 seconds',?,?,?,?,?) RETURNING expires_at",request,player,channel,destination.x(),destination.y(),destination.z(),destination.yaw(),destination.pitch()); var expiry=insert.executeQuery()) {
-                    expiry.next(); return new Reservation(request,player,channel,destination,expiry.getTimestamp(1).toInstant());
+                    expiry.next(); return new Reservation(request,player,channel,destination,instant(expiry,1));
                 }
             }
         });
@@ -126,6 +129,6 @@ public final class NetworkStore {
         db.transaction(c -> { update(c,"INSERT INTO link_warps(name,node,world,x,y,z,yaw,pitch) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET node=excluded.node,world=excluded.world,x=excluded.x,y=excluded.y,z=excluded.z,yaw=excluded.yaw,pitch=excluded.pitch",name,d.node(),d.world(),d.x(),d.y(),d.z(),d.yaw(),d.pitch()); return null; });
     }
     private static Reservation reservation(ResultSet r) throws SQLException {
-        return new Reservation(r.getObject("id",UUID.class),r.getObject("player",UUID.class),r.getString("channel"),new Destination(r.getString("node"),r.getString("world"),r.getDouble("x"),r.getDouble("y"),r.getDouble("z"),r.getFloat("yaw"),r.getFloat("pitch")),r.getTimestamp("expires_at").toInstant());
+        return new Reservation(r.getObject("id",UUID.class),r.getObject("player",UUID.class),r.getString("channel"),new Destination(r.getString("node"),r.getString("world"),r.getDouble("x"),r.getDouble("y"),r.getDouble("z"),r.getFloat("yaw"),r.getFloat("pitch")),instant(r,"expires_at"));
     }
 }

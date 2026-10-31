@@ -6,7 +6,7 @@
 
 ## 빌드
 
-Java 25와 Git이 필요합니다. DB·프록시 검증에는 PostgreSQL 17, Redis 7, Velocity 4.3.1을 사용했습니다. Redis는 선택 사항입니다.
+Java 25와 Git이 필요합니다. SQL 저장소는 PostgreSQL 17 또는 MariaDB 11.4를 사용할 수 있습니다. Redis 7은 선택 사항이며 프록시는 Velocity 4.3.1을 사용합니다.
 
 ```powershell
 .\gradlew.bat applyAllPatches
@@ -37,6 +37,15 @@ database:
   jdbc-url: 'jdbc:postgresql://127.0.0.1:5432/link'
   username: 'link'
   password: ''
+storage:
+  worlds: database
+  slimevault:
+    endpoint: 'http://127.0.0.1:3900'
+    region: slimevault
+    bucket: worlds
+    prefix: link
+    access-key: ''
+    secret-key: ''
 redis:
   enabled: false
   uri: 'redis://127.0.0.1:6379'
@@ -47,9 +56,19 @@ spawn:
   max-worlds: 3
 ```
 
-PostgreSQL에 DB·계정을 먼저 생성하고 `database` 항목을 입력하세요. Velocity 설정까지 준비한 뒤 `mode: journal`로 변경합니다. 비밀번호는 따옴표로 감싸고 작은따옴표 자체는 YAML 작은따옴표 문자열 안에서 두 번 적습니다. Redis 사용 시 `redis.enabled: true`로 바꿉니다.
+PostgreSQL 또는 MariaDB에 DB·계정을 먼저 생성하고 `database` 항목을 입력하세요. MariaDB의 URL 예시는 `jdbc:mariadb://127.0.0.1:3306/link`입니다. MariaDB는 InnoDB를 사용하며 `innodb_flush_log_at_trx_commit=1`, binlog 활성 시 `sync_binlog=1`이 필요합니다. Velocity 설정까지 준비한 뒤 `mode: journal`로 변경합니다. 비밀번호는 따옴표로 감싸고 작은따옴표 자체는 YAML 작은따옴표 문자열 안에서 두 번 적습니다. Redis 사용 시 `redis.enabled: true`로 바꿉니다.
 
 YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 실행할 수 있습니다. 접속 정보가 들어간 `link.yml`은 커밋하지 않습니다.
+
+### SlimeVault에 월드 저장
+
+`storage.worlds: slimevault`로 설정하고 [SlimeVault 0.2](https://github.com/seraphicness/SlimeVault)의 endpoint·bucket·접근 키를 입력하세요. 기존 `link.yml`에는 위 `storage` 블록을 직접 추가합니다. 버킷은 미리 생성하고 해당 키에 읽기·쓰기 권한을 부여해야 합니다. `LINK_S3_ACCESS_KEY`와 `LINK_S3_SECRET_KEY` 환경 변수로 YAML의 키를 덮어쓸 수 있습니다.
+
+월드와 템플릿의 SRF 바이트는 SlimeVault에 저장하고, 플레이어 데이터·SavedData·이벤트·세션·정원·월드의 정확한 객체 리비전 참조는 SQL에 저장합니다. 따라서 S3만으로 실행할 수는 없습니다. 모든 백엔드는 같은 SQL DB와 SlimeVault endpoint·bucket·prefix를 사용합니다. Velocity에는 S3 자격 증명이 필요하지 않습니다.
+
+업로드는 SigV4/path-style 요청으로 writer 임대를 얻은 뒤 새 `.slime` 키에 조건부 저장합니다. 성공한 VersionId와 SHA-256을 SQL에 기록하고 복구 시 그 리비전을 읽어 검증합니다. S3 오류 시 로컬 저장으로 우회하지 않습니다. SQL 실패 또는 응답 유실로 참조되지 않은 객체가 남을 수 있으며 자동 삭제하지 않습니다. SQL 이력이 참조하는 객체와 리비전을 SlimeVault에서 정리하면 복구할 수 없으므로 SQL과 S3를 함께 백업해야 합니다. S3 업로드를 기다리는 현재 구현은 틱 지연을 늘릴 수 있으며 성능 개선을 보장하지 않습니다.
+
+기존 SQL 바이너리는 S3 모드에서도 읽을 수 있지만 DB 종류 변경과 기존 데이터의 일괄 이전은 자동으로 수행하지 않습니다. S3 참조가 생긴 뒤 저장소를 끄거나 bucket/prefix를 바꾸면 해당 데이터를 복구할 수 없습니다.
 
 ## 환경 변수와 기존 옵션
 
@@ -78,6 +97,8 @@ YAML을 설정하면 `java -Xms512M -Xmx2G -jar Link-26.3-dev.jar --nogui`로 �
 ```
 
 템플릿 버전은 다른 내용으로 덮어쓸 수 없습니다. 수정본은 버전을 올려 발행하세요. 서버가 실행된 뒤에는 `/link editor`와 `/link publish`로 새 템플릿을 제작할 수 있습니다. 테스트용 빈 템플릿 생성기는 `link_runtime_test` DB에서만 동작하며 일반 템플릿 준비 절차를 대신하지 않습니다.
+
+오프라인 발행 도구에서도 S3를 쓰려면 `LINK_WORLD_STORAGE=slimevault`, `LINK_S3_ENDPOINT`, `LINK_S3_BUCKET`, `LINK_S3_ACCESS_KEY`, `LINK_S3_SECRET_KEY`를 설정합니다. 선택 값은 `LINK_S3_REGION`(기본 `slimevault`), `LINK_S3_PREFIX`(기본 `link`)입니다. SQL 접속 환경 변수도 필요합니다.
 
 ## Velocity 연결
 
