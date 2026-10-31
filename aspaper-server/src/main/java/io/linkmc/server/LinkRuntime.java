@@ -22,6 +22,8 @@ public final class LinkRuntime implements LinkApi {
     private volatile boolean closing;
     private final ScheduledExecutorService notifications=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Notifications").factory());
     private SpawnProvisioner provisioner;
+    private boolean templateEditor;
+    private String bootstrapWorld="link-spawn";
     private volatile Session nodeLease;
     private final ScheduledExecutorService heartbeat=Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("Link-Heartbeat").factory());
     private LinkRuntime(Database db,String node)throws Exception {
@@ -29,12 +31,13 @@ public final class LinkRuntime implements LinkApi {
         leases=new SessionStore(db,30);
         nodeLease=NativeJournal.enabled()?NativeJournal.startupOwner():leases.acquire(UUID.nameUUIDFromBytes(("link-node:"+node).getBytes(StandardCharsets.UTF_8)),node);
         service=new LinkService(db);
-        driver=new LinkWorldDriver(new EventStore(db),nodeLease,node);
+        driver=new LinkWorldDriver(new EventStore(db),nodeLease,node,db.worldBlobs());
         worlds=new WorldService(driver,new TemplateStore(db));
     }
     /** Called from PaperWorldLoader before any default dimension is constructed. */
     public static void beforeWorlds(){
-        String mode=System.getProperty("link.mode","disabled");
+        var config=LinkConfiguration.get();
+        String mode=config.mode();
         if(mode.equals("disabled"))return;
         if(!mode.equals("tools")&&!mode.equals("journal"))throw new IllegalStateException("Link strict gameplay mode is not yet validated. Use journal only in an isolated integration environment.");
         if(instance!=null)throw new IllegalStateException("Link initialized twice");
@@ -43,21 +46,28 @@ public final class LinkRuntime implements LinkApi {
             if(!forwarding.enabled||!forwarding.onlineMode||forwarding.secret.isBlank())throw new IllegalStateException("Link journal requires authenticated Velocity modern forwarding");
         }
         try {
-            String url=required("LINK_JDBC_URL"),user=required("LINK_DB_USER"),password=required("LINK_DB_PASSWORD");
-            String node=required("LINK_NODE_ID");LinkApi.requireName(node);
-            Database db=NativeJournal.enabled()?NativeJournal.database():Database.pooled(url,user,password);db.migrate();
+            String url=config.jdbcUrl(),user=config.username(),password=config.password();
+            String node=config.node();
+            Database db=NativeJournal.enabled()?NativeJournal.database():Database.pooled(url,user,password);if(!NativeJournal.enabled())db.worldStorage(config.worldStorage());db.migrate();
             LinkRuntime runtime=new LinkRuntime(db,node);
             try {
-                String template=System.getProperty("link.spawn.template","lobby");
-                int version=Integer.getInteger("link.spawn.version",1);
-                byte[] bytes=new TemplateStore(db).read(template,version);
-                SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrap("link-spawn",NativeJournal.worldOrTemplate("link-spawn",bytes)),null,null);
+                String template=config.template();
+                int version=config.templateVersion();
+                var published=new TemplateStore(db).find(template,version);
+                runtime.templateEditor=published.isEmpty();
+                if(runtime.templateEditor){
+                    runtime.bootstrapWorld="link-template-editor";
+                    SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrapEditor(runtime.bootstrapWorld),null,null);
+                    net.minecraft.server.MinecraftServer.LOGGER.warn("Spawn template {}:{} is missing. Opening link-template-editor. Build here, run /link publish link-template-editor {} {}, then restart.",template,version,template,version);
+                }else{
+                    SlimeNMSBridge.instance().setDefaultWorlds(runtime.driver.bootstrap("link-spawn",NativeJournal.worldOrTemplate("link-spawn",published.get())),null,null);
+                }
                 instance=runtime;RuntimeProvider.install(runtime);
                 runtime.heartbeat.scheduleWithFixedDelay(() -> {
                     try {
                         runtime.nodeLease=runtime.leases.renew(runtime.nodeLease);NativeJournal.renew();
                         if(NativeJournal.enabled()){
-                            runtime.networkStore.heartbeat(node,Integer.getInteger("link.node.capacity",150));
+                            runtime.networkStore.heartbeat(node,config.nodeCapacity());
                             if(runtime.provisioner!=null)runtime.provisioner.ensureSpare(0,65,0,0,0).whenComplete((created,error)->{if(error!=null)net.minecraft.server.MinecraftServer.LOGGER.error("Link spawn provisioning failed",error);});
                         }
                     }
@@ -68,31 +78,33 @@ public final class LinkRuntime implements LinkApi {
                 },5,5,TimeUnit.SECONDS);
                 NativeJournal.finishStartup();
             } catch(Exception e){runtime.close();throw e;}
-        }catch(Exception e){throw new IllegalStateException("Link bootstrap failed; no fallback world will be created",e);}
+        }catch(Exception e){throw new IllegalStateException("Link bootstrap failed",e);}
     }
     public static boolean managesWorlds(){return instance!=null;}
     public static void afterWorlds(){
         if(instance==null)return;
         LinkRuntime runtime=instance;
+        var config=LinkConfiguration.get();
         try{
+            if(runtime.templateEditor)runtime.driver.prepareBootstrapEditor(runtime.bootstrapWorld);
             if(NativeJournal.enabled()){
-                for(String name:NativeJournal.recoveredWorlds())if(!name.equals("link-spawn"))runtime.driver.restoreNative(name,NativeJournal.recoveredWorld(name));
+                for(String name:NativeJournal.recoveredWorlds())if(!name.equals(runtime.bootstrapWorld))runtime.driver.restoreNative(name,NativeJournal.recoveredWorld(name));
                 net.minecraft.server.MinecraftServer.getServer().linkRestoreSavedData();
                 NativeJournal.activate();
-                runtime.networkStore.heartbeat(runtime.node,Integer.getInteger("link.node.capacity",150));
+                runtime.networkStore.heartbeat(runtime.node,config.nodeCapacity());
                 runtime.networkStore.reconcileNode(runtime.nodeLease);
-                for(var world:org.bukkit.Bukkit.getWorlds())if(world.getName().equals("link-spawn")||world.getName().startsWith("spawn-")){
+                for(var world:org.bukkit.Bukkit.getWorlds())if(runtime.templateEditor?world.getName().equals(runtime.bootstrapWorld):(world.getName().equals("link-spawn")||world.getName().startsWith("spawn-"))){
                     var pos=world.getSpawnLocation();
-                    runtime.networkStore.register(runtime.node+":"+world.getName(),new Destination(runtime.node,world.getName(),pos.getX(),pos.getY(),pos.getZ(),pos.getYaw(),pos.getPitch()),Integer.getInteger("link.spawn.capacity",50));
+                    runtime.networkStore.register(runtime.node+":"+world.getName(),new Destination(runtime.node,world.getName(),pos.getX(),pos.getY(),pos.getZ(),pos.getYaw(),pos.getPitch()),config.worldCapacity());
                 }
-                runtime.provisioner=new SpawnProvisioner(runtime.worlds,runtime.networkStore,runtime.node,System.getProperty("link.spawn.template","lobby"),Integer.getInteger("link.spawn.version",1),Integer.getInteger("link.spawn.capacity",50),Integer.getInteger("link.spawn.max-worlds",3));
+                if(!runtime.templateEditor)runtime.provisioner=new SpawnProvisioner(runtime.worlds,runtime.networkStore,runtime.node,config.template(),config.templateVersion(),config.worldCapacity(),config.maxWorlds());
             }
-            String redisUri=System.getenv("LINK_REDIS_URI");
+            String redisUri=config.redisUri();
             if(redisUri!=null&&!redisUri.isBlank())runtime.notifications.scheduleWithFixedDelay(()->runtime.deliverNotifications(redisUri),0,5,TimeUnit.SECONDS);
             LinkCommand.register(runtime);
+            LinkTravelCommand.register(runtime);
         }catch(Exception e){throw new IllegalStateException("Link world activation failed",e);}
     }
-    private static String required(String name){String value=System.getenv(name);if(value==null||value.isBlank())throw new IllegalStateException("Missing "+name);return value;}
     public static void stop(){LinkRuntime runtime=instance;if(runtime!=null){instance=null;RuntimeProvider.uninstall(runtime);runtime.close();}}
     static void fence(){LinkRuntime runtime=instance;if(runtime!=null)runtime.heartbeat.shutdownNow();}
     private synchronized void deliverNotifications(String uri){

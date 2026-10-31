@@ -48,8 +48,11 @@ public final class ArrivalStore {
     public void cancel(UUID ticket,UUID player) throws Exception {
         db.transaction(c -> {
             lock(c,"session:"+player);lock(c,"allocation");
-            try(var s=sql(c,"UPDATE link_arrivals SET state='CANCELLED' WHERE id=? AND player=? AND state='ISSUED' RETURNING reservation",ticket,player);var r=s.executeQuery()) {
-                if(r.next())update(c,"DELETE FROM link_reservations WHERE id=? AND state='RESERVED'",r.getObject(1,UUID.class));
+            try(var s=sql(c,"SELECT reservation FROM link_arrivals WHERE id=? AND player=? AND state='ISSUED' FOR UPDATE",ticket,player);var r=s.executeQuery()) {
+                if(r.next()){
+                    update(c,"UPDATE link_arrivals SET state='CANCELLED' WHERE id=?",ticket);
+                    update(c,"DELETE FROM link_reservations WHERE id=? AND state='RESERVED'",r.getObject(1,UUID.class));
+                }
             }return null;
         });
     }
