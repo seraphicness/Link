@@ -26,7 +26,7 @@ git -C aspaper-server/src/minecraft/java status --short
 
 ## 변경 검증
 
-Java 25를 사용합니다. DB 테스트에는 폐기 가능한 PostgreSQL·Redis가 필요하며 테스트가 Link 테이블을 초기화합니다. 환경 변수와 실제 서버 검사 절차는 [검증 문서](docs/validation.md)에 있습니다.
+Java 25를 사용합니다. DB 테스트에는 폐기 가능한 PostgreSQL 또는 MariaDB와 Redis가 필요하며 테스트가 Link 테이블을 초기화합니다. 환경 변수와 실제 서버 검사 절차는 [검증 문서](docs/validation.md)에 있습니다.
 
 ```powershell
 .\gradlew.bat :link-core:test
